@@ -1,0 +1,18 @@
+{
+  "name": "@waverpc/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome Extension for WaveRPC",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@waverpc/providers": "workspace:*",
+    "@waverpc/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

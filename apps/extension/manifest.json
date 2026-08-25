@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "WaveRPC",
+  "version": "0.1.0",
+  "description": "Universal music Rich Presence extension for Discord",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.soundcloud.com/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.soundcloud.com/*"],
+      "js": ["dist/content/soundcloud.js"]
+    }
+  ]
+}

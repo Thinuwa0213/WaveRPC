@@ -1,0 +1,19 @@
+{
+  "name": "@waverpc/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop application for WaveRPC",
+  "main": "./dist/main/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@waverpc/providers": "workspace:*",
+    "@waverpc/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
