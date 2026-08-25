@@ -160,7 +160,9 @@ export class DiscordRPCClient {
 
     this.reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectIntervalMs);
-    console.log(`[DiscordRPCClient] Scheduling reconnect attempt #${this.reconnectAttempts} in ${delay}ms...`);
+    console.log(
+      `[DiscordRPCClient] Scheduling reconnect attempt #${this.reconnectAttempts} in ${delay}ms...`
+    );
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

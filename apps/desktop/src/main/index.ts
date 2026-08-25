@@ -23,7 +23,9 @@ export class WaveRPCDesktopApp {
 
     await this.discordService.connect();
 
-    const activeProviderId = await this.providerService.detectActiveProvider('https://mockmusic.local/track/synthwave-dreams');
+    const activeProviderId = await this.providerService.detectActiveProvider(
+      'https://mockmusic.local/track/synthwave-dreams'
+    );
     console.log(`[WaveRPCDesktopApp] Active Provider: ${activeProviderId}`);
 
     const mockProvider = this.providerService.getRegistry().getProvider('mock');

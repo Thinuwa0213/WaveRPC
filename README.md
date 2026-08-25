@@ -16,13 +16,13 @@
 
 ## 🗺️ Roadmap & Supported Providers
 
-| Provider | Status | App Support |
-| :--- | :---: | :---: |
-| 🟠 **SoundCloud** | 🚧 Target Provider (Phase 1) | Extension & Desktop |
-| 🟢 **Spotify** | 📅 Planned | Extension & Desktop |
-| 🔴 **YouTube Music** | 📅 Planned | Extension & Desktop |
-| 💖 **Apple Music** | 📅 Planned | Extension & Desktop |
-| 🌐 **Browser Media Sessions** | 📅 Planned | Extension |
+| Provider                      |            Status            |     App Support     |
+| :---------------------------- | :--------------------------: | :-----------------: |
+| 🟠 **SoundCloud**             | 🚧 Target Provider (Phase 1) | Extension & Desktop |
+| 🟢 **Spotify**                |          📅 Planned          | Extension & Desktop |
+| 🔴 **YouTube Music**          |          📅 Planned          | Extension & Desktop |
+| 💖 **Apple Music**            |          📅 Planned          | Extension & Desktop |
+| 🌐 **Browser Media Sessions** |          📅 Planned          |      Extension      |
 
 ---
 

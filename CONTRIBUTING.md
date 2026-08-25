@@ -16,12 +16,14 @@ Please be respectful, collaborative, and helpful in all interactions within issu
 ### Setup Project
 
 1. Fork and clone the repository:
+
    ```bash
    git clone https://github.com/<your-username>/WaveRPC.git
    cd WaveRPC
    ```
 
 2. Install workspace dependencies:
+
    ```bash
    pnpm install
    ```
