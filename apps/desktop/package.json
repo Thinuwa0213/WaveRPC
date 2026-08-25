@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",
-    "@waverpc/shared": "workspace:*"
+    "@waverpc/shared": "workspace:*",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "typescript": "^5.5.4"
   }
 }
