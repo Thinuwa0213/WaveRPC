@@ -23,4 +23,3 @@ This is the first usable alpha release of WaveRPC, establishing a local-only, pr
 - **Structured Local Logging**: Consistent contextual logging across desktop runtime and shared modules.
 - **Automated Test Suite**: Automated unit and integration test coverage for privacy sanitization, presence payload creation, reconnect handlers, and transport protocols.
 - **Real Windows End-to-End Validation**: Verified operating status on Windows with active Discord Desktop and SoundCloud web playback.
-
