@@ -1,5 +1,7 @@
-import { TypedEventEmitter, Track, PrivacySanitizer } from '@waverpc/shared';
+import { TypedEventEmitter, Track, PrivacySanitizer, Logger } from '@waverpc/shared';
 import { ExtensionMessage, TrackUpdateMessage, PlaybackUpdateMessage } from './types.js';
+
+const log = new Logger('MessageHandler');
 
 export class ExtensionMessageHandler {
   constructor(private events: TypedEventEmitter) {}
@@ -8,9 +10,11 @@ export class ExtensionMessageHandler {
     try {
       const parsed: ExtensionMessage = JSON.parse(rawMessage);
       if (!parsed || typeof parsed.type !== 'string') {
-        console.warn('[ExtensionMessageHandler] Received invalid message structure.');
+        log.warn('Received invalid message structure.');
         return false;
       }
+
+      log.debug('Incoming message type:', parsed.type);
 
       switch (parsed.type) {
         case 'TRACK_UPDATE':
@@ -21,17 +25,19 @@ export class ExtensionMessageHandler {
           this.handlePlaybackUpdate(parsed as PlaybackUpdateMessage);
           return true;
 
+        case 'TRACK_CLEAR':
+          this.handleTrackClear();
+          return true;
+
         case 'PING':
           return true;
 
         default:
-          console.warn(
-            `[ExtensionMessageHandler] Unknown message type: ${(parsed as { type: string }).type}`
-          );
+          log.warn(`Unknown message type: ${(parsed as { type: string }).type}`);
           return false;
       }
     } catch (error) {
-      console.error('[ExtensionMessageHandler] Failed to parse JSON message:', error);
+      log.error('Failed to parse JSON message:', error);
       return false;
     }
   }
@@ -39,7 +45,7 @@ export class ExtensionMessageHandler {
   private handleTrackUpdate(message: TrackUpdateMessage): void {
     const { title, artist, url, artwork, duration, isPlaying, providerId } = message.payload;
     if (!title || !artist || !url) {
-      console.warn('[ExtensionMessageHandler] Incomplete track payload received.');
+      log.warn('Incomplete track payload received.');
       return;
     }
 
@@ -58,15 +64,20 @@ export class ExtensionMessageHandler {
 
     const sanitizedTrack = PrivacySanitizer.sanitizeTrack(rawTrack);
 
-    console.log(
-      `[ExtensionMessageHandler] Processed & sanitized TRACK_UPDATE: "${sanitizedTrack.title}" by ${sanitizedTrack.artist}`
+    log.info(
+      `Processed & sanitized TRACK_UPDATE: "${sanitizedTrack.title}" by ${sanitizedTrack.artist}`
     );
     this.events.emit('track:changed', sanitizedTrack);
   }
 
   private handlePlaybackUpdate(message: PlaybackUpdateMessage): void {
     const { playbackState } = message.payload;
-    console.log(`[ExtensionMessageHandler] Processed PLAYBACK_UPDATE: ${playbackState}`);
+    log.info(`Processed PLAYBACK_UPDATE: ${playbackState}`);
     this.events.emit('playback:stateChanged', playbackState);
+  }
+
+  private handleTrackClear(): void {
+    log.info('Processed TRACK_CLEAR: clearing active track metadata.');
+    this.events.emit('track:changed', undefined);
   }
 }

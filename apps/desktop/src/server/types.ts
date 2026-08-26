@@ -1,6 +1,6 @@
 import { PlaybackState } from '@waverpc/shared';
 
-export type MessageType = 'TRACK_UPDATE' | 'PLAYBACK_UPDATE' | 'PING' | 'PONG';
+export type MessageType = 'TRACK_UPDATE' | 'PLAYBACK_UPDATE' | 'TRACK_CLEAR' | 'PING' | 'PONG';
 
 export interface TrackUpdatePayload {
   title: string;
@@ -27,6 +27,10 @@ export interface PlaybackUpdateMessage {
   payload: PlaybackUpdatePayload;
 }
 
+export interface TrackClearMessage {
+  type: 'TRACK_CLEAR';
+}
+
 export interface PingMessage {
   type: 'PING';
 }
@@ -36,7 +40,7 @@ export interface PongMessage {
 }
 
 export type ExtensionMessage =
-  TrackUpdateMessage | PlaybackUpdateMessage | PingMessage | PongMessage;
+  TrackUpdateMessage | PlaybackUpdateMessage | TrackClearMessage | PingMessage | PongMessage;
 
 export interface ServerOptions {
   port?: number;

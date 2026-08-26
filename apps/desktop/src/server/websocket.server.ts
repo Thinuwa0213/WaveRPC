@@ -1,7 +1,9 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { TypedEventEmitter } from '@waverpc/shared';
+import { TypedEventEmitter, Logger } from '@waverpc/shared';
 import { ExtensionMessageHandler } from './message.handler.js';
 import { ServerOptions } from './types.js';
+
+const log = new Logger('WebSocketServer');
 
 export class WaveRPCWebSocketServer {
   private wss: WebSocketServer | null = null;
@@ -24,12 +26,12 @@ export class WaveRPCWebSocketServer {
         });
 
         this.wss.on('listening', () => {
-          console.log(`[WebSocketServer] Listening on ws://${this.host}:${this.port}`);
+          log.info(`Listening on ws://${this.host}:${this.port}`);
           resolve(true);
         });
 
         this.wss.on('connection', (ws: WebSocket) => {
-          console.log('[WebSocketServer] Extension client connected.');
+          log.info('Extension client connected.');
 
           ws.on('message', (data: Buffer | string) => {
             const raw = data.toString();
@@ -37,20 +39,20 @@ export class WaveRPCWebSocketServer {
           });
 
           ws.on('close', () => {
-            console.log('[WebSocketServer] Extension client disconnected.');
+            log.info('Extension client disconnected.');
           });
 
           ws.on('error', (err: Error) => {
-            console.error('[WebSocketServer] Client socket error:', err.message);
+            log.error('Client socket error:', err.message);
           });
         });
 
         this.wss.on('error', (err: Error) => {
-          console.error('[WebSocketServer] Server error:', err.message);
+          log.error('Server error:', err.message);
           resolve(false);
         });
       } catch (error) {
-        console.error('[WebSocketServer] Failed to initialize WebSocket server:', error);
+        log.error('Failed to initialize WebSocket server:', error);
         resolve(false);
       }
     });
@@ -61,7 +63,7 @@ export class WaveRPCWebSocketServer {
 
     return new Promise((resolve) => {
       this.wss?.close(() => {
-        console.log('[WebSocketServer] Server stopped.');
+        log.info('Server stopped.');
         this.wss = null;
         resolve();
       });

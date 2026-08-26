@@ -1,13 +1,13 @@
 {
   "name": "waverpc-monorepo",
-  "version": "0.1.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "description": "Universal music Rich Presence platform connecting music services with Discord Rich Presence",
   "scripts": {
     "build": "pnpm --recursive run build",
     "typecheck": "pnpm --recursive run typecheck",
     "lint": "pnpm --recursive run lint",
-    "test": "pnpm --recursive --filter=@waverpc/shared run test",
+    "test": "pnpm --recursive --if-present run test",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\""
   },

@@ -3,13 +3,16 @@ import {
   ExtensionTrackPayload,
   ExtensionPlaybackPayload,
 } from './messages.js';
+import { Logger } from '@waverpc/shared';
+
+const log = new Logger('ExtensionWS');
 
 export type ConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED';
 
 export interface ExtensionWSClientOptions {
   url?: string;
   autoReconnect?: boolean;
-  reconnectIntervalMs?: number;
+  maxReconnectIntervalMs?: number;
 }
 
 export class ExtensionWSClient {
@@ -17,13 +20,14 @@ export class ExtensionWSClient {
   private state: ConnectionState = 'DISCONNECTED';
   private url: string;
   private autoReconnect: boolean;
-  private reconnectIntervalMs: number;
+  private maxReconnectIntervalMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts: number = 0;
 
   constructor(options?: ExtensionWSClientOptions) {
     this.url = options?.url ?? 'ws://127.0.0.1:6124';
     this.autoReconnect = options?.autoReconnect ?? true;
-    this.reconnectIntervalMs = options?.reconnectIntervalMs ?? 5000;
+    this.maxReconnectIntervalMs = options?.maxReconnectIntervalMs ?? 30000;
   }
 
   public get connectionState(): ConnectionState {
@@ -34,14 +38,22 @@ export class ExtensionWSClient {
     if (this.state === 'CONNECTED' || this.state === 'CONNECTING') return;
 
     this.state = 'CONNECTING';
-    console.log(`[ExtensionWSClient] Connecting to ${this.url}...`);
+    log.info(`Connecting to ${this.url}...`);
 
     try {
       this.socket = new WebSocket(this.url);
 
       this.socket.onopen = () => {
-        console.log('[ExtensionWSClient] WebSocket connection established.');
+        log.info('Connected to Desktop Bridge.');
         this.state = 'CONNECTED';
+
+        if (this.reconnectAttempts > 0) {
+          log.info(
+            `Reconnected successfully after ${this.reconnectAttempts} attempt(s). Backoff reset.`
+          );
+        }
+        this.reconnectAttempts = 0;
+
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
@@ -49,21 +61,22 @@ export class ExtensionWSClient {
       };
 
       this.socket.onclose = () => {
-        console.log('[ExtensionWSClient] WebSocket connection closed.');
+        log.info('Disconnected from Desktop Bridge.');
         this.handleDisconnect();
       };
 
       this.socket.onerror = (error) => {
-        console.warn('[ExtensionWSClient] WebSocket error:', error);
+        log.warn('Socket error:', error);
       };
     } catch (error) {
-      console.error('[ExtensionWSClient] Failed to create WebSocket connection:', error);
+      log.error('Failed to create WebSocket connection:', error);
       this.handleDisconnect();
     }
   }
 
   public disconnect(): void {
     this.autoReconnect = false;
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -75,6 +88,7 @@ export class ExtensionWSClient {
     }
 
     this.state = 'DISCONNECTED';
+    this.reconnectAttempts = 0;
   }
 
   public sendTrackUpdate(payload: ExtensionTrackPayload): boolean {
@@ -91,9 +105,15 @@ export class ExtensionWSClient {
     });
   }
 
+  public sendTrackClear(): boolean {
+    return this.send({
+      type: 'TRACK_CLEAR',
+    });
+  }
+
   private send(message: ExtensionOutboundMessage): boolean {
     if (this.state !== 'CONNECTED' || !this.socket) {
-      console.warn('[ExtensionWSClient] Cannot send message: client is not connected.');
+      log.warn('Send failed: client is not connected.');
       return false;
     }
 
@@ -102,7 +122,7 @@ export class ExtensionWSClient {
       this.socket.send(json);
       return true;
     } catch (error) {
-      console.error('[ExtensionWSClient] Failed to send message:', error);
+      log.error('Failed to send message:', error);
       return false;
     }
   }
@@ -111,12 +131,25 @@ export class ExtensionWSClient {
     this.socket = null;
     this.state = 'DISCONNECTED';
 
-    if (this.autoReconnect && !this.reconnectTimer) {
-      console.log(`[ExtensionWSClient] Scheduling reconnect in ${this.reconnectIntervalMs}ms...`);
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = null;
-        this.connect();
-      }, this.reconnectIntervalMs);
+    if (this.autoReconnect) {
+      this.scheduleReconnect();
     }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      1000 * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectIntervalMs
+    );
+
+    log.info(`Reconnect attempt #${this.reconnectAttempts} scheduled in ${delay}ms...`);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 }

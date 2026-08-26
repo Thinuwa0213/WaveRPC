@@ -1,8 +1,12 @@
-import { TypedEventEmitter } from '@waverpc/shared';
+import { TypedEventEmitter, Logger } from '@waverpc/shared';
 import { DiscordService } from '../services/discord.service.js';
 import { ProviderService } from '../services/provider.service.js';
 import { IPCService } from '../services/ipc.service.js';
 import { WaveRPCWebSocketServer } from '../server/websocket.server.js';
+
+const pkg = require('../../package.json') as { version: string };
+
+const log = new Logger('WaveRPCDesktop');
 
 export class WaveRPCDesktopApp {
   private events: TypedEventEmitter;
@@ -21,7 +25,7 @@ export class WaveRPCDesktopApp {
   }
 
   public async bootstrap(): Promise<void> {
-    console.log('[WaveRPCDesktopApp] Initializing WaveRPC Desktop App (Phase 2.1)...');
+    log.info(`Starting WaveRPC Desktop v${pkg.version}...`);
     this.ipcService.initialize();
 
     await this.discordService.connect();
@@ -30,7 +34,7 @@ export class WaveRPCDesktopApp {
     const activeProviderId = await this.providerService.detectActiveProvider(
       'https://mockmusic.local/track/synthwave-dreams'
     );
-    console.log(`[WaveRPCDesktopApp] Active Provider: ${activeProviderId}`);
+    log.info(`Active Provider: ${activeProviderId}`);
 
     const mockProvider = this.providerService.getRegistry().getProvider('mock');
     if (mockProvider) {
@@ -38,17 +42,19 @@ export class WaveRPCDesktopApp {
       this.providerService.setTrack(track);
     }
 
-    console.log('[WaveRPCDesktopApp] Bootstrap complete.');
+    log.info('Bootstrap complete. Waiting for extension connections...');
   }
 
   public async shutdown(): Promise<void> {
+    log.info('Shutting down WaveRPC Desktop...');
     await this.wsServer.stop();
     await this.discordService.disconnect();
     this.events.removeAllListeners();
+    log.info('Shutdown complete.');
   }
 }
 
 const app = new WaveRPCDesktopApp();
 app.bootstrap().catch((err) => {
-  console.error('Failed to bootstrap WaveRPC Desktop:', err);
+  log.error('Failed to bootstrap WaveRPC Desktop:', err);
 });

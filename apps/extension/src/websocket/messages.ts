@@ -1,6 +1,6 @@
 import { PlaybackState } from '@waverpc/shared';
 
-export type ExtensionMessageType = 'TRACK_UPDATE' | 'PLAYBACK_UPDATE' | 'PING';
+export type ExtensionMessageType = 'TRACK_UPDATE' | 'PLAYBACK_UPDATE' | 'TRACK_CLEAR' | 'PING';
 
 export interface ExtensionTrackPayload {
   title: string;
@@ -19,7 +19,7 @@ export interface ExtensionTrackUpdateMessage {
 
 export interface ExtensionPlaybackPayload {
   isPlaying: boolean;
-  playbackState?: PlaybackState;
+  playbackState: PlaybackState;
 }
 
 export interface ExtensionPlaybackUpdateMessage {
@@ -27,9 +27,16 @@ export interface ExtensionPlaybackUpdateMessage {
   payload: ExtensionPlaybackPayload;
 }
 
+export interface ExtensionTrackClearMessage {
+  type: 'TRACK_CLEAR';
+}
+
 export interface ExtensionPingMessage {
   type: 'PING';
 }
 
 export type ExtensionOutboundMessage =
-  ExtensionTrackUpdateMessage | ExtensionPlaybackUpdateMessage | ExtensionPingMessage;
+  | ExtensionTrackUpdateMessage
+  | ExtensionPlaybackUpdateMessage
+  | ExtensionTrackClearMessage
+  | ExtensionPingMessage;

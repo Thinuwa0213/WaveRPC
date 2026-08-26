@@ -1,4 +1,10 @@
 import * as net from 'net';
+import { Logger } from '@waverpc/shared';
+
+const log = new Logger('DiscordRPC');
+
+/** Maximum number of Discord IPC pipe endpoints to scan (0–9). */
+const MAX_IPC_PIPE_ID = 9;
 
 export type RPCConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED';
 
@@ -35,49 +41,42 @@ export class DiscordRPCClient {
     }
 
     this.state = 'CONNECTING';
-    console.log(`[DiscordRPCClient] Attempting connection for Client ID: ${this.clientId}`);
+    log.info(`Connecting to Discord IPC (Client ID: ${this.clientId})...`);
 
-    return new Promise((resolve) => {
-      const pipePath = this.getIPCPath(0);
-      const socket = net.createConnection(pipePath);
+    for (let pipeId = 0; pipeId <= MAX_IPC_PIPE_ID; pipeId++) {
+      const connected = await this.tryPipe(pipeId);
+      if (connected) {
+        return true;
+      }
+    }
 
-      socket.once('connect', () => {
-        console.log('[DiscordRPCClient] IPC Pipe connected. Sending HANDSHAKE...');
-        this.socket = socket;
-        this.sendHandshake();
-        this.state = 'CONNECTED';
-        this.reconnectAttempts = 0;
-        this.setupSocketListeners();
-        resolve(true);
-      });
+    log.warn('All Discord IPC pipes (0–9) unavailable.');
+    this.state = 'DISCONNECTED';
 
-      socket.once('error', (err: Error) => {
-        console.warn(`[DiscordRPCClient] Connection error on ${pipePath}: ${err.message}`);
-        this.handleDisconnect();
-        resolve(false);
-      });
-    });
+    if (this.autoReconnect) {
+      this.scheduleReconnect();
+    }
+
+    return false;
   }
 
   public async disconnect(): Promise<void> {
     this.autoReconnect = false;
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
 
-    if (this.socket) {
-      this.socket.destroy();
-      this.socket = null;
-    }
-
+    this.cleanupSocket();
     this.state = 'DISCONNECTED';
-    console.log('[DiscordRPCClient] Disconnected cleanly.');
+    this.reconnectAttempts = 0;
+    log.info('Disconnected cleanly.');
   }
 
   public async setActivity(activity: unknown): Promise<boolean> {
     if (this.state !== 'CONNECTED' || !this.socket) {
-      console.warn('[DiscordRPCClient] Cannot set activity: RPC Client is not connected.');
+      log.warn('Cannot set activity: RPC Client is not connected.');
       return false;
     }
 
@@ -95,6 +94,48 @@ export class DiscordRPCClient {
 
   public async clearActivity(): Promise<boolean> {
     return this.setActivity(null);
+  }
+
+  private tryPipe(pipeId: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const pipePath = this.getIPCPath(pipeId);
+      log.debug(`Trying IPC pipe ${pipeId}: ${pipePath}`);
+
+      let settled = false;
+      const socket = net.createConnection(pipePath);
+
+      socket.once('connect', () => {
+        if (settled) return;
+        settled = true;
+        log.info(`Connected to Discord IPC pipe ${pipeId}. Sending HANDSHAKE...`);
+        this.socket = socket;
+        this.sendHandshake();
+        this.state = 'CONNECTED';
+
+        if (this.reconnectAttempts > 0) {
+          log.info(
+            `Connection restored after ${this.reconnectAttempts} reconnect attempt(s). Backoff reset.`
+          );
+        }
+        this.reconnectAttempts = 0;
+
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+
+        this.setupSocketListeners();
+        resolve(true);
+      });
+
+      socket.once('error', (err: Error) => {
+        if (settled) return;
+        settled = true;
+        log.debug(`Pipe ${pipeId} unavailable: ${err.message}`);
+        socket.destroy();
+        resolve(false);
+      });
+    });
   }
 
   private sendHandshake(): void {
@@ -117,10 +158,9 @@ export class DiscordRPCClient {
       headerBuffer.writeInt32LE(dataBuffer.length, 4);
 
       const packet = Buffer.concat([headerBuffer, dataBuffer]);
-      this.socket.write(packet);
-      return true;
+      return this.socket.write(packet);
     } catch (error) {
-      console.error('[DiscordRPCClient] Failed to send packet:', error);
+      log.error('Failed to send packet:', error);
       return false;
     }
   }
@@ -133,21 +173,50 @@ export class DiscordRPCClient {
     });
 
     this.socket.on('close', () => {
-      console.log('[DiscordRPCClient] Socket closed.');
+      log.info('Discord IPC socket closed.');
       this.handleDisconnect();
     });
 
     this.socket.on('error', (err: Error) => {
-      console.error('[DiscordRPCClient] Socket error:', err.message);
+      log.error('Socket error:', err.message);
     });
   }
 
-  private handleSocketData(_data: Buffer): void {
-    // Incoming Discord IPC responses can be handled here
+  private handleSocketData(data: Buffer): void {
+    try {
+      if (data.length < 8) {
+        log.warn('Received malformed Discord IPC frame (too short).');
+        return;
+      }
+
+      const opcode = data.readInt32LE(0);
+      const length = data.readInt32LE(4);
+
+      if (data.length < 8 + length) {
+        log.warn(
+          `Received partial Discord IPC frame (expected ${8 + length} bytes, got ${data.length}).`
+        );
+        return;
+      }
+
+      const payloadBuffer = data.subarray(8, 8 + length);
+      const payload = JSON.parse(payloadBuffer.toString('utf-8'));
+
+      const cmd = typeof payload.cmd === 'string' ? payload.cmd : undefined;
+      const evt = typeof payload.evt === 'string' ? payload.evt : undefined;
+
+      if (cmd || evt) {
+        log.debug(
+          `Discord response: opcode=${opcode}${cmd ? ` cmd=${cmd}` : ''}${evt ? ` evt=${evt}` : ''}`
+        );
+      }
+    } catch {
+      log.warn('Failed to parse Discord IPC response frame.');
+    }
   }
 
   private handleDisconnect(): void {
-    this.socket = null;
+    this.cleanupSocket();
     this.state = 'DISCONNECTED';
 
     if (this.autoReconnect) {
@@ -159,17 +228,26 @@ export class DiscordRPCClient {
     if (this.reconnectTimer) return;
 
     this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), this.maxReconnectIntervalMs);
-    console.log(
-      `[DiscordRPCClient] Scheduling reconnect attempt #${this.reconnectAttempts} in ${delay}ms...`
+    const delay = Math.min(
+      1000 * Math.pow(2, this.reconnectAttempts - 1),
+      this.maxReconnectIntervalMs
     );
+    log.info(`Reconnect attempt #${this.reconnectAttempts} scheduled in ${delay}ms...`);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch((err: Error) => {
-        console.error('[DiscordRPCClient] Reconnect attempt failed:', err.message);
+        log.error('Reconnect attempt failed:', err.message);
       });
     }, delay);
+  }
+
+  private cleanupSocket(): void {
+    if (this.socket) {
+      this.socket.removeAllListeners();
+      this.socket.destroy();
+      this.socket = null;
+    }
   }
 
   private getIPCPath(id: number): string {

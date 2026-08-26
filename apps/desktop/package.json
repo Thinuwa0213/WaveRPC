@@ -1,13 +1,14 @@
 {
   "name": "@waverpc/desktop",
-  "version": "0.1.0",
+  "version": "0.3.0-alpha.0",
   "private": true,
   "description": "Desktop application for WaveRPC",
   "main": "./dist/main/index.js",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "tsc && node --test dist/**/*.test.js"
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",

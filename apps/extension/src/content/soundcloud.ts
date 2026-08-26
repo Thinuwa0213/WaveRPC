@@ -1,13 +1,18 @@
 import { ExtensionTrackPayload } from '../websocket/messages.js';
+import { Logger, PrivacySanitizer } from '@waverpc/shared';
+
+const log = new Logger('SoundCloudDetector');
 
 declare const chrome: any;
 
 export class SoundCloudPageDetector {
   private lastTrackSignature: string = '';
+  private lastIsPlaying: boolean | null = null;
+  private hasActiveTrack: boolean = false;
   private observer: MutationObserver | null = null;
 
   public initialize(): void {
-    console.log('[WaveRPC SoundCloud Detector] Initializing detector observer...');
+    log.info('Initializing detector observer...');
     this.detectAndSend();
     this.setupDOMObserver();
     this.setupAudioListeners();
@@ -101,6 +106,7 @@ export class SoundCloudPageDetector {
     }
 
     if (!title || !artist) {
+      log.debug('Metadata unavailable: missing title or artist.');
       return null;
     }
 
@@ -117,17 +123,47 @@ export class SoundCloudPageDetector {
 
   public detectAndSend(): void {
     const payload = this.detectTrackPayload();
-    if (!payload) return;
 
+    if (!payload) {
+      if (this.hasActiveTrack) {
+        this.hasActiveTrack = false;
+        this.lastTrackSignature = '';
+        this.lastIsPlaying = null;
+        log.info('TRACK_CLEAR emitted: no active track detected.');
+        this.sendToBackground({
+          type: 'TRACK_CLEAR',
+        });
+      }
+      return;
+    }
+
+    this.hasActiveTrack = true;
     const signature = `${payload.title}|${payload.artist}|${payload.url}|${payload.isPlaying}`;
     if (signature === this.lastTrackSignature) {
       return;
     }
 
+    // Determine what changed for logging
+    const oldSignature = this.lastTrackSignature;
+    const playbackChanged = this.lastIsPlaying !== null && this.lastIsPlaying !== payload.isPlaying;
     this.lastTrackSignature = signature;
-    console.log(
-      `[WaveRPC SoundCloud Detector] Emitting update: "${payload.title}" by ${payload.artist} [Playing: ${payload.isPlaying}]`
-    );
+    this.lastIsPlaying = payload.isPlaying;
+
+    const sanitizedUrl = PrivacySanitizer.sanitizeUrl(payload.url);
+
+    if (!oldSignature) {
+      log.info(
+        `Track detected: "${payload.title}" by ${payload.artist} [${payload.isPlaying ? 'Playing' : 'Paused'}] ${sanitizedUrl}`
+      );
+    } else if (playbackChanged) {
+      log.info(
+        `Playback state changed: ${payload.isPlaying ? 'Playing' : 'Paused'} — "${payload.title}" by ${payload.artist}`
+      );
+    } else {
+      log.info(
+        `Track changed: "${payload.title}" by ${payload.artist} [${payload.isPlaying ? 'Playing' : 'Paused'}] ${sanitizedUrl}`
+      );
+    }
 
     this.sendToBackground({
       type: 'TRACK_UPDATE',

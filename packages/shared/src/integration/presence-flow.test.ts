@@ -11,10 +11,15 @@ const net = require('node:net');
 // Mock Socket for Discord RPC
 class MockSocket extends EventEmitter {
   public destroyed = false;
+  public failNextWrite = false;
   public writtenPackets: Array<{ opcode: number; payload: any }> = [];
 
   public write(data: Buffer): boolean {
     if (this.destroyed) return false;
+    if (this.failNextWrite) {
+      this.failNextWrite = false;
+      return false;
+    }
 
     try {
       if (data.length >= 8) {
@@ -42,6 +47,7 @@ describe('Presence Flow Integration Tests', () => {
   let mockSocket: MockSocket;
   let ExtensionMessageHandler: any;
   let PresenceManager: any;
+  let PresenceMapper: any;
 
   before(() => {
     originalCreateConnection = net.createConnection;
@@ -49,9 +55,11 @@ describe('Presence Flow Integration Tests', () => {
     // Load the desktop compiled modules at runtime to avoid tsc rootDir errors
     const handlerPath = '../../../../apps/desktop/dist/server/message.handler.js';
     const managerPath = '../../../../apps/desktop/dist/presence/presence.manager.js';
+    const mapperPath = '../../../../apps/desktop/dist/presence/presence.mapper.js';
 
     ExtensionMessageHandler = require(handlerPath).ExtensionMessageHandler;
     PresenceManager = require(managerPath).PresenceManager;
+    PresenceMapper = require(mapperPath).PresenceMapper;
   });
 
   after(() => {
@@ -226,5 +234,314 @@ describe('Presence Flow Integration Tests', () => {
     assert.strictEqual(playActivity.assets.small_text, 'Playing');
 
     await manager.shutdown();
+  });
+
+  // Phase 2.6D.1 Regression Tests
+  it('should suppress duplicate presence updates for identical track state', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    await manager.initialize();
+
+    mockSocket.writtenPackets = [];
+
+    const trackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Monstercat Track',
+        artist: 'Vicetone',
+        url: 'https://soundcloud.com/vicetone/monstercat-track',
+        isPlaying: true,
+        providerId: 'soundcloud',
+      },
+    };
+
+    // First send
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 10));
+    const setActivityPackets1 = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity !== null
+    );
+    assert.strictEqual(setActivityPackets1.length, 1, 'First update should write to Discord RPC');
+
+    mockSocket.writtenPackets = [];
+
+    // Second send (duplicate)
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 10));
+    const setActivityPackets2 = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity !== null
+    );
+    assert.strictEqual(setActivityPackets2.length, 0, 'Duplicate update should be suppressed');
+
+    await manager.shutdown();
+  });
+
+  it('should retry presence update if initial setActivity call fails', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    await manager.initialize();
+    await new Promise((r) => setTimeout(r, 20)); // Ensure connection handshake write completes
+
+    mockSocket.writtenPackets = [];
+    mockSocket.failNextWrite = true; // Cause first setActivity write to fail
+
+    const trackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Retry Track',
+        artist: 'Retry Artist',
+        url: 'https://soundcloud.com/artist/retry-track',
+        isPlaying: true,
+      },
+    };
+
+    // First send - write fails
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 20));
+
+    mockSocket.writtenPackets = [];
+
+    // Second send - should retry because signature was not cached
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const setActivityPackets = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity !== null
+    );
+    assert.strictEqual(
+      setActivityPackets.length,
+      1,
+      'Second attempt should succeed and write to Discord'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('should suppress duplicate TRACK_CLEAR calls when presence is already cleared', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    await manager.initialize();
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Set presence first
+    const trackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Active Track',
+        artist: 'Active Artist',
+        url: 'https://soundcloud.com/artist/active-track',
+        isPlaying: true,
+      },
+    };
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 20));
+
+    mockSocket.writtenPackets = [];
+
+    // Send first TRACK_CLEAR
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const clearPackets1 = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity === null
+    );
+    assert.strictEqual(clearPackets1.length, 1, 'First TRACK_CLEAR should send clearActivity');
+
+    mockSocket.writtenPackets = [];
+
+    // Send second TRACK_CLEAR (duplicate)
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const clearPackets2 = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity === null
+    );
+    assert.strictEqual(clearPackets2.length, 0, 'Duplicate TRACK_CLEAR should be suppressed');
+
+    await manager.shutdown();
+  });
+
+  it('should retry clearActivity if initial clear attempt fails', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    await manager.initialize();
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Set presence first
+    const trackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Active Track',
+        artist: 'Active Artist',
+        url: 'https://soundcloud.com/artist/active-track',
+        isPlaying: true,
+      },
+    };
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 20)); // Ensure initial track setActivity completes
+
+    mockSocket.writtenPackets = [];
+    mockSocket.failNextWrite = true; // Cause clearActivity write to fail
+
+    // First TRACK_CLEAR - fails
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    mockSocket.writtenPackets = [];
+
+    // Second TRACK_CLEAR - should retry because clear failed
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const clearPackets = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity === null
+    );
+    assert.strictEqual(clearPackets.length, 1, 'Second TRACK_CLEAR should succeed');
+
+    await manager.shutdown();
+  });
+
+  it('should maintain stable startTimestamp across repeated updates for the same track', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    await manager.initialize();
+
+    const trackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Stable Track',
+        artist: 'Stable Artist',
+        url: 'https://soundcloud.com/artist/stable-track',
+        isPlaying: true,
+        providerId: 'soundcloud',
+      },
+    };
+
+    handler.handleMessage(JSON.stringify(trackMsg));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const firstPacket = mockSocket.writtenPackets.find(
+      (p: any) => p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY'
+    );
+    assert.ok(firstPacket, 'firstPacket should be present');
+    const firstStartTimestamp = firstPacket.payload.args.activity.timestamps.start;
+
+    // Send update with updated duration (same track title & url)
+    const updatedTrackMsg = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Stable Track',
+        artist: 'Stable Artist',
+        url: 'https://soundcloud.com/artist/stable-track',
+        duration: 200000,
+        isPlaying: true,
+        providerId: 'soundcloud',
+      },
+    };
+
+    mockSocket.writtenPackets = [];
+    handler.handleMessage(JSON.stringify(updatedTrackMsg));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const secondPacket = mockSocket.writtenPackets.find(
+      (p: any) => p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY'
+    );
+    assert.ok(secondPacket, 'secondPacket should be present');
+    const secondStartTimestamp = secondPacket.payload.args.activity.timestamps.start;
+
+    assert.strictEqual(
+      firstStartTimestamp,
+      secondStartTimestamp,
+      'Start timestamp must remain stable for the same playing track'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('should handle missing artwork without producing fake default_music key', () => {
+    for (const artworkValue of [undefined, '']) {
+      const track = {
+        title: 'No Artwork Track',
+        artist: 'No Artwork Artist',
+        url: 'https://soundcloud.com/artist/no-artwork',
+        artwork: artworkValue,
+        isPlaying: true,
+      };
+
+      const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud');
+      assert.ok(activity);
+      assert.strictEqual(activity.details, 'No Artwork Track');
+      assert.strictEqual(activity.state, 'by No Artwork Artist');
+      assert.strictEqual(
+        activity.assets?.large_image,
+        undefined,
+        'large_image should be undefined when artwork is missing or empty'
+      );
+      assert.notStrictEqual(
+        activity.assets?.large_image,
+        'default_music',
+        'should not produce fake default_music image'
+      );
+      assert.strictEqual(
+        activity.assets?.large_text,
+        undefined,
+        'large_text should be undefined when artwork is missing or empty'
+      );
+      assert.strictEqual(activity.assets?.small_image, 'play_icon');
+    }
+  });
+
+  it('should truncate details and state to max 128 characters without throwing', () => {
+    const longTitle = 'A'.repeat(200);
+    const longArtist = 'B'.repeat(200);
+    const track = {
+      title: longTitle,
+      artist: longArtist,
+      url: 'https://soundcloud.com/artist/long-track',
+      isPlaying: true,
+    };
+
+    const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud');
+    assert.ok(activity);
+    assert.ok(
+      activity.details.length <= 128,
+      `details length ${activity.details.length} should be <= 128`
+    );
+    assert.ok(
+      activity.state.length <= 128,
+      `state length ${activity.state.length} should be <= 128`
+    );
+  });
+
+  it('should omit Listen button when track URL is missing or empty', () => {
+    for (const urlValue of [undefined, '']) {
+      const trackNoUrl = {
+        title: 'Track Without URL',
+        artist: 'Artist',
+        url: urlValue as any,
+        isPlaying: true,
+      };
+
+      const activity = PresenceMapper.mapTrackToActivity(trackNoUrl, 'playing', 'SoundCloud');
+      assert.ok(activity);
+      assert.strictEqual(
+        activity.buttons,
+        undefined,
+        'buttons should be undefined when URL is missing or empty'
+      );
+      const emptyUrlButton = activity.buttons?.find((b: any) => b.url === '');
+      assert.strictEqual(emptyUrlButton, undefined, 'no button with url: "" should exist');
+    }
   });
 });
