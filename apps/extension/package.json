@@ -4,16 +4,17 @@
   "private": true,
   "description": "Chrome Extension for WaveRPC",
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/build.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "tsc && node --test dist/**/*.test.js"
+    "test": "node scripts/build.js --test && node --test dist-test/**/*.test.js"
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",
     "@waverpc/shared": "workspace:*"
   },
   "devDependencies": {
+    "esbuild": "^0.24.0",
     "typescript": "^5.5.4"
   }
 }

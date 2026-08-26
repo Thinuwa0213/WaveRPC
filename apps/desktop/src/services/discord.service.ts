@@ -23,4 +23,8 @@ export class DiscordService {
   public getPresence(): DiscordActivityPayload | undefined {
     return this.presenceManager.getActiveActivity();
   }
+
+  public isConnected(): boolean {
+    return this.presenceManager.isConnected();
+  }
 }

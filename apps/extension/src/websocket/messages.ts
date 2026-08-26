@@ -10,6 +10,7 @@ export interface ExtensionTrackPayload {
   duration?: number;
   isPlaying: boolean;
   providerId?: string;
+  playbackPosition?: number;
 }
 
 export interface ExtensionTrackUpdateMessage {

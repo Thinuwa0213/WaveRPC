@@ -12,6 +12,7 @@ export interface DiscordRPCClientOptions {
   clientId: string;
   autoReconnect?: boolean;
   maxReconnectIntervalMs?: number;
+  onStateChange?: (state: RPCConnectionState) => void;
 }
 
 export class DiscordRPCClient {
@@ -23,16 +24,42 @@ export class DiscordRPCClient {
   private reconnectAttempts: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pid: number;
+  private onStateChange?: (state: RPCConnectionState) => void;
+  private buffer: Buffer = Buffer.alloc(0);
+  private pendingRequests = new Map<
+    string,
+    {
+      resolve: (value: boolean) => void;
+      timer: NodeJS.Timeout;
+      cmd: string;
+    }
+  >();
 
   constructor(options: DiscordRPCClientOptions) {
     this.clientId = options.clientId;
     this.autoReconnect = options.autoReconnect ?? true;
     this.maxReconnectIntervalMs = options.maxReconnectIntervalMs ?? 30000;
+    this.onStateChange = options.onStateChange;
     this.pid = process.pid;
+  }
+
+  private setState(state: RPCConnectionState): void {
+    if (this.state !== state) {
+      this.state = state;
+      this.onStateChange?.(state);
+    }
   }
 
   public get ConnectionState(): RPCConnectionState {
     return this.state;
+  }
+
+  private isPlaceholderOrInvalidClientId(clientId?: string): boolean {
+    if (!clientId) return true;
+    const trimmed = clientId.trim();
+    if (trimmed === '' || trimmed === '123456789012345678') return true;
+    if (!/^\d+$/.test(trimmed)) return true;
+    return false;
   }
 
   public async connect(): Promise<boolean> {
@@ -40,7 +67,15 @@ export class DiscordRPCClient {
       return this.state === 'CONNECTED';
     }
 
-    this.state = 'CONNECTING';
+    if (this.isPlaceholderOrInvalidClientId(this.clientId)) {
+      log.warn(
+        `Discord Client ID configuration is missing, placeholder, or invalid (${this.clientId}). Skipping Discord RPC connection scan to prevent aggressive connection loops.`
+      );
+      this.setState('DISCONNECTED');
+      return false;
+    }
+
+    this.setState('CONNECTING');
     log.info(`Connecting to Discord IPC (Client ID: ${this.clientId})...`);
 
     for (let pipeId = 0; pipeId <= MAX_IPC_PIPE_ID; pipeId++) {
@@ -51,7 +86,7 @@ export class DiscordRPCClient {
     }
 
     log.warn('All Discord IPC pipes (0–9) unavailable.');
-    this.state = 'DISCONNECTED';
+    this.setState('DISCONNECTED');
 
     if (this.autoReconnect) {
       this.scheduleReconnect();
@@ -69,7 +104,7 @@ export class DiscordRPCClient {
     }
 
     this.cleanupSocket();
-    this.state = 'DISCONNECTED';
+    this.setState('DISCONNECTED');
     this.reconnectAttempts = 0;
     log.info('Disconnected cleanly.');
   }
@@ -80,20 +115,47 @@ export class DiscordRPCClient {
       return false;
     }
 
-    const payload = {
-      cmd: 'SET_ACTIVITY',
-      args: {
-        pid: this.pid,
-        activity,
-      },
-      nonce: Date.now().toString(),
-    };
+    const nonce = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 9);
 
-    return this.sendPacket(1, payload);
+    return new Promise<boolean>((resolve) => {
+      const payload = {
+        cmd: 'SET_ACTIVITY',
+        args: {
+          pid: this.pid,
+          activity,
+        },
+        nonce,
+      };
+
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.has(nonce)) {
+          this.pendingRequests.delete(nonce);
+          log.warn('Discord IPC command timed out.');
+          resolve(false);
+        }
+      }, 5000);
+
+      this.pendingRequests.set(nonce, { resolve, timer, cmd: 'SET_ACTIVITY' });
+
+      const sent = this.sendPacket(1, payload);
+      if (!sent) {
+        clearTimeout(timer);
+        this.pendingRequests.delete(nonce);
+        resolve(false);
+      }
+    });
   }
 
   public async clearActivity(): Promise<boolean> {
-    return this.setActivity(null);
+    log.info('Clearing Discord activity...');
+    const success = await this.setActivity(null);
+    if (success) {
+      log.info('Discord activity cleared.');
+      return true;
+    } else {
+      log.warn('Failed to clear Discord activity.');
+      return false;
+    }
   }
 
   private tryPipe(pipeId: number): Promise<boolean> {
@@ -110,7 +172,7 @@ export class DiscordRPCClient {
         log.info(`Connected to Discord IPC pipe ${pipeId}. Sending HANDSHAKE...`);
         this.socket = socket;
         this.sendHandshake();
-        this.state = 'CONNECTED';
+        this.setState('CONNECTED');
 
         if (this.reconnectAttempts > 0) {
           log.info(
@@ -183,41 +245,64 @@ export class DiscordRPCClient {
   }
 
   private handleSocketData(data: Buffer): void {
-    try {
-      if (data.length < 8) {
-        log.warn('Received malformed Discord IPC frame (too short).');
-        return;
+    this.buffer = Buffer.concat([this.buffer, data]);
+
+    const MAX_PAYLOAD_LENGTH = 10 * 1024 * 1024; // 10MB conservative limit
+
+    while (this.buffer.length >= 8) {
+      const opcode = this.buffer.readInt32LE(0);
+      const length = this.buffer.readInt32LE(4);
+
+      if (length < 0 || length > MAX_PAYLOAD_LENGTH) {
+        log.warn(`Invalid Discord IPC frame length: ${length}. Discarding buffer.`);
+        this.buffer = Buffer.alloc(0);
+        break;
       }
 
-      const opcode = data.readInt32LE(0);
-      const length = data.readInt32LE(4);
-
-      if (data.length < 8 + length) {
-        log.warn(
-          `Received partial Discord IPC frame (expected ${8 + length} bytes, got ${data.length}).`
-        );
-        return;
+      if (this.buffer.length < 8 + length) {
+        // Partial frame, wait for more data
+        break;
       }
 
-      const payloadBuffer = data.subarray(8, 8 + length);
-      const payload = JSON.parse(payloadBuffer.toString('utf-8'));
+      const payloadBuffer = this.buffer.subarray(8, 8 + length);
+      // Consume frame from buffer
+      this.buffer = this.buffer.subarray(8 + length);
 
-      const cmd = typeof payload.cmd === 'string' ? payload.cmd : undefined;
-      const evt = typeof payload.evt === 'string' ? payload.evt : undefined;
+      try {
+        const payload = JSON.parse(payloadBuffer.toString('utf-8'));
+        const cmd = typeof payload.cmd === 'string' ? payload.cmd : undefined;
+        const evt = typeof payload.evt === 'string' ? payload.evt : undefined;
+        const nonce = typeof payload.nonce === 'string' ? payload.nonce : undefined;
 
-      if (cmd || evt) {
-        log.debug(
-          `Discord response: opcode=${opcode}${cmd ? ` cmd=${cmd}` : ''}${evt ? ` evt=${evt}` : ''}`
-        );
+        if (cmd || evt) {
+          log.debug(
+            `Discord response: opcode=${opcode}${cmd ? ` cmd=${cmd}` : ''}${evt ? ` evt=${evt}` : ''}`
+          );
+        }
+
+        if (nonce && this.pendingRequests.has(nonce)) {
+          const req = this.pendingRequests.get(nonce)!;
+
+          if (cmd === req.cmd) {
+            clearTimeout(req.timer);
+            this.pendingRequests.delete(nonce);
+
+            if (evt === 'ERROR') {
+              req.resolve(false);
+            } else {
+              req.resolve(true);
+            }
+          }
+        }
+      } catch (err: any) {
+        log.warn('Failed to parse Discord IPC response frame:', err.message);
       }
-    } catch {
-      log.warn('Failed to parse Discord IPC response frame.');
     }
   }
 
   private handleDisconnect(): void {
     this.cleanupSocket();
-    this.state = 'DISCONNECTED';
+    this.setState('DISCONNECTED');
 
     if (this.autoReconnect) {
       this.scheduleReconnect();
@@ -248,6 +333,13 @@ export class DiscordRPCClient {
       this.socket.destroy();
       this.socket = null;
     }
+    this.buffer = Buffer.alloc(0);
+
+    for (const req of this.pendingRequests.values()) {
+      clearTimeout(req.timer);
+      req.resolve(false);
+    }
+    this.pendingRequests.clear();
   }
 
   private getIPCPath(id: number): string {

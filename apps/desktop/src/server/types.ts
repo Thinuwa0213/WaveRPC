@@ -10,6 +10,7 @@ export interface TrackUpdatePayload {
   duration?: number;
   isPlaying: boolean;
   providerId?: string;
+  playbackPosition?: number;
 }
 
 export interface TrackUpdateMessage {

@@ -22,6 +22,7 @@ export interface DiscordActivityPayload {
   assets?: PresenceAssets;
   buttons?: PresenceButton[];
   instance?: boolean;
+  type?: number;
 }
 
 export interface PresenceManagerOptions {

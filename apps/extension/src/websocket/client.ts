@@ -21,8 +21,10 @@ export class ExtensionWSClient {
   private url: string;
   private autoReconnect: boolean;
   private maxReconnectIntervalMs: number;
-  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
+  private heartbeatIntervalMs: number = 20000;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options?: ExtensionWSClientOptions) {
     this.url = options?.url ?? 'ws://127.0.0.1:6124';
@@ -46,6 +48,7 @@ export class ExtensionWSClient {
       this.socket.onopen = () => {
         log.info('Connected to Desktop Bridge.');
         this.state = 'CONNECTED';
+        this.startHeartbeat();
 
         if (this.reconnectAttempts > 0) {
           log.info(
@@ -76,6 +79,7 @@ export class ExtensionWSClient {
 
   public disconnect(): void {
     this.autoReconnect = false;
+    this.stopHeartbeat();
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -130,9 +134,30 @@ export class ExtensionWSClient {
   private handleDisconnect(): void {
     this.socket = null;
     this.state = 'DISCONNECTED';
+    this.stopHeartbeat();
 
     if (this.autoReconnect) {
       this.scheduleReconnect();
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      this.sendPing();
+    }, this.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private sendPing(): void {
+    if (this.state === 'CONNECTED' && this.socket?.readyState === WebSocket.OPEN) {
+      this.send({ type: 'PING' });
     }
   }
 

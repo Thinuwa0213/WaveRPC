@@ -14,7 +14,9 @@ export class ExtensionMessageHandler {
         return false;
       }
 
-      log.debug('Incoming message type:', parsed.type);
+      if (parsed.type !== 'PING') {
+        log.debug('Incoming message type:', parsed.type);
+      }
 
       switch (parsed.type) {
         case 'TRACK_UPDATE':
@@ -43,7 +45,8 @@ export class ExtensionMessageHandler {
   }
 
   private handleTrackUpdate(message: TrackUpdateMessage): void {
-    const { title, artist, url, artwork, duration, isPlaying, providerId } = message.payload;
+    const { title, artist, url, artwork, duration, isPlaying, playbackPosition, providerId } =
+      message.payload;
     if (!title || !artist || !url) {
       log.warn('Incomplete track payload received.');
       return;
@@ -60,6 +63,7 @@ export class ExtensionMessageHandler {
       artwork,
       duration,
       isPlaying,
+      playbackPosition,
     };
 
     const sanitizedTrack = PrivacySanitizer.sanitizeTrack(rawTrack);

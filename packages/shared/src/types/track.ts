@@ -5,4 +5,5 @@ export interface Track {
   artwork?: string;
   duration?: number;
   isPlaying: boolean;
+  playbackPosition?: number;
 }

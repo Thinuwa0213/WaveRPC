@@ -5,6 +5,8 @@ import { PresenceManagerOptions, DiscordActivityPayload } from './types.js';
 
 const log = new Logger('PresenceManager');
 
+export type PresenceState = 'UNKNOWN' | 'ACTIVE' | 'CLEARED';
+
 export class PresenceManager {
   private rpcClient: DiscordRPCClient;
   private currentTrack?: Track;
@@ -12,7 +14,8 @@ export class PresenceManager {
   private currentProviderName: string = 'WaveRPC';
   private activeActivity?: DiscordActivityPayload;
   private lastAppliedSignature: string | null = null;
-  private isPresenceCleared: boolean = true;
+  private presenceState: PresenceState = 'UNKNOWN';
+  private presenceRevision: number = 0;
   private trackStartTime?: number;
 
   constructor(
@@ -22,9 +25,22 @@ export class PresenceManager {
     this.rpcClient = new DiscordRPCClient({
       clientId: options.clientId,
       autoReconnect: true,
+      onStateChange: (state) => {
+        if (state === 'CONNECTED') {
+          this.events.emit('discord:connected');
+        } else if (state === 'DISCONNECTED') {
+          this.presenceState = 'UNKNOWN';
+          this.lastAppliedSignature = null;
+          this.events.emit('discord:disconnected');
+        }
+      },
     });
 
     this.setupEventListeners();
+  }
+
+  public isConnected(): boolean {
+    return this.rpcClient.ConnectionState === 'CONNECTED';
   }
 
   public async initialize(): Promise<boolean> {
@@ -34,11 +50,19 @@ export class PresenceManager {
 
   public async shutdown(): Promise<void> {
     log.info('Shutting down Presence Manager...');
-    if (!this.isPresenceCleared) {
+    if (this.presenceState === 'ACTIVE') {
       try {
-        const cleared = await this.rpcClient.clearActivity();
+        const clearPromise = this.rpcClient.clearActivity();
+        const timeoutPromise = new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            log.warn('Discord clearActivity timed out during shutdown.');
+            resolve(false);
+          }, 2000);
+        });
+
+        const cleared = await Promise.race([clearPromise, timeoutPromise]);
         if (cleared) {
-          this.isPresenceCleared = true;
+          this.presenceState = 'CLEARED';
           this.lastAppliedSignature = null;
           log.info('Presence successfully cleared on shutdown.');
         }
@@ -60,8 +84,13 @@ export class PresenceManager {
 
     this.events.on('provider:activated', (providerId) => {
       log.info(`Provider activated: ${providerId}`);
-      this.currentProviderName = providerId.charAt(0).toUpperCase() + providerId.slice(1);
-      this.updatePresence();
+      this.currentProviderName =
+        providerId === 'soundcloud'
+          ? 'SoundCloud'
+          : providerId.charAt(0).toUpperCase() + providerId.slice(1);
+      if (this.currentTrack) {
+        this.updatePresence();
+      }
     });
   }
 
@@ -118,17 +147,24 @@ export class PresenceManager {
 
     if (activity) {
       const signature = JSON.stringify(activity);
-      if (signature === this.lastAppliedSignature) {
+      if (this.presenceState === 'ACTIVE' && signature === this.lastAppliedSignature) {
         log.debug('Duplicate presence update skipped.');
         return;
       }
 
+      const currentRevision = ++this.presenceRevision;
+
       this.rpcClient
         .setActivity(activity)
         .then((success) => {
+          if (currentRevision !== this.presenceRevision) {
+            log.debug('Presence update ignored: newer update is in progress or completed.');
+            return;
+          }
+
           if (success) {
             this.lastAppliedSignature = signature;
-            this.isPresenceCleared = false;
+            this.presenceState = 'ACTIVE';
             log.info(
               `Presence update successfully applied: "${activity.details}" ${activity.state}`
             );
@@ -137,26 +173,36 @@ export class PresenceManager {
           }
         })
         .catch((err) => {
+          if (currentRevision !== this.presenceRevision) return;
           log.error('Failed to set activity:', err);
         });
     } else {
-      if (this.isPresenceCleared) {
+      if (this.presenceState === 'CLEARED' || this.presenceState === 'UNKNOWN') {
         log.debug('Duplicate presence clear skipped.');
         return;
       }
 
+      log.info('Clearing Discord presence: no active track.');
+      const currentRevision = ++this.presenceRevision;
+
       this.rpcClient
         .clearActivity()
         .then((success) => {
+          if (currentRevision !== this.presenceRevision) {
+            log.debug('Presence clear ignored: newer update is in progress or completed.');
+            return;
+          }
+
           if (success) {
             this.lastAppliedSignature = null;
-            this.isPresenceCleared = true;
+            this.presenceState = 'CLEARED';
             log.info('Presence successfully cleared.');
           } else {
             log.warn('Failed to clear activity: Discord RPC returned false');
           }
         })
         .catch((err) => {
+          if (currentRevision !== this.presenceRevision) return;
           log.error('Failed to clear activity:', err);
         });
     }

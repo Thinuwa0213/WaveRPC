@@ -5,10 +5,11 @@
   "description": "Desktop application for WaveRPC",
   "main": "./dist/main/index.js",
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js",
+    "start": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "lint": "eslint .",
-    "test": "tsc && node --test dist/**/*.test.js"
+    "test": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js && node --test dist/**/*.test.js"
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
+    "electron": "^44.0.0",
     "typescript": "^5.5.4"
   }
 }

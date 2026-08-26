@@ -10,8 +10,12 @@ export class WaveRPCWebSocketServer {
   private messageHandler: ExtensionMessageHandler;
   private port: number;
   private host: string;
+  private clients = new Set<WebSocket>();
 
-  constructor(events: TypedEventEmitter, options?: ServerOptions) {
+  constructor(
+    private events: TypedEventEmitter,
+    options?: ServerOptions
+  ) {
     this.port = options?.port ?? 6124;
     this.host = options?.host ?? '127.0.0.1';
     this.messageHandler = new ExtensionMessageHandler(events);
@@ -32,6 +36,10 @@ export class WaveRPCWebSocketServer {
 
         this.wss.on('connection', (ws: WebSocket) => {
           log.info('Extension client connected.');
+          this.clients.add(ws);
+          if (this.clients.size === 1) {
+            this.events.emit('extension:connected');
+          }
 
           ws.on('message', (data: Buffer | string) => {
             const raw = data.toString();
@@ -40,6 +48,10 @@ export class WaveRPCWebSocketServer {
 
           ws.on('close', () => {
             log.info('Extension client disconnected.');
+            this.clients.delete(ws);
+            if (this.clients.size === 0) {
+              this.events.emit('extension:disconnected');
+            }
           });
 
           ws.on('error', (err: Error) => {
@@ -65,6 +77,7 @@ export class WaveRPCWebSocketServer {
       this.wss?.close(() => {
         log.info('Server stopped.');
         this.wss = null;
+        this.clients.clear();
         resolve();
       });
     });
@@ -72,5 +85,9 @@ export class WaveRPCWebSocketServer {
 
   public get isRunning(): boolean {
     return this.wss !== null;
+  }
+
+  public hasConnectedClients(): boolean {
+    return this.clients.size > 0;
   }
 }

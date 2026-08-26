@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WaveRPC</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./main.js"></script>
+</head>
+<body>
+  <div class="ambient-glow" aria-hidden="true"></div>
+  <div class="app-container">
+    
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-main">
+        <h1 class="app-title" id="app-title-header">WaveRPC</h1>
+        <span class="app-version" id="version-badge" aria-label="App Version">v0.0.0</span>
+      </div>
+      <p class="app-subtitle">Music Presence for Discord</p>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="app-content">
+      
+      <!-- Left Column: Connection Status Overview -->
+      <aside class="sidebar" aria-label="Connection Status">
+        <div class="status-group">
+          
+          <!-- Discord Card -->
+          <section class="status-card" id="card-discord">
+            <h2 class="card-title">Discord</h2>
+            <div class="status-row">
+              <span id="discord-status-badge" class="badge badge-muted">Disconnected</span>
+              <span id="discord-status-text" class="status-desc">Offline</span>
+            </div>
+          </section>
+
+          <!-- Browser Extension Card -->
+          <section class="status-card" id="card-extension">
+            <h2 class="card-title">Browser Extension</h2>
+            <div class="status-row">
+              <span id="extension-status-badge" class="badge badge-muted">Waiting</span>
+              <span id="extension-status-text" class="status-desc">No Extension Connected</span>
+            </div>
+          </section>
+
+          <!-- Active Provider Card -->
+          <section class="status-card" id="card-provider">
+            <h2 class="card-title">Active Provider</h2>
+            <div class="status-row">
+              <span id="provider-status-badge" class="badge badge-muted">Inactive</span>
+              <span id="provider-status-text" class="status-desc">No Active Provider</span>
+            </div>
+          </section>
+          
+        </div>
+      </aside>
+
+      <!-- Right Column: Now Playing / Empty State -->
+      <section class="now-playing-panel" aria-label="Current Playback Details">
+        
+        <!-- Empty State Container -->
+        <div id="track-empty" class="empty-state">
+          <div class="empty-icon-wrapper" aria-hidden="true">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+            </svg>
+          </div>
+          <h2 class="empty-title">No active track</h2>
+          <p class="empty-subtitle">Start playing music on SoundCloud to show it on Discord.</p>
+        </div>
+
+        <!-- Active Track Container -->
+        <div id="track-active" class="track-active-container hidden">
+          <div class="artwork-container">
+            <img id="track-artwork" src="" alt="Album Art" class="artwork-image hidden" />
+            <div id="artwork-placeholder" class="artwork-placeholder">
+              <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
+              </svg>
+            </div>
+          </div>
+          
+          <div class="track-details">
+            <h2 id="track-title" class="track-title">Unknown Title</h2>
+            <p id="track-artist" class="track-artist">Unknown Artist</p>
+            
+            <div class="track-meta-row">
+              <span id="track-provider-badge" class="provider-badge">SoundCloud</span>
+              <span class="meta-dot" aria-hidden="true">•</span>
+              <span id="track-playback-state" class="badge">Playing</span>
+            </div>
+          </div>
+        </div>
+
+      </section>
+      
+    </main>
+    
+    <!-- Settings Panel -->
+    <section class="settings-panel" aria-labelledby="settings-title">
+      <div class="settings-header">
+        <h2 id="settings-title" class="settings-title">Settings</h2>
+      </div>
+
+      <div class="settings-list">
+        <!-- Minimize to Tray -->
+        <div class="settings-row">
+          <div class="settings-info">
+            <label for="setting-minimizeToTray" class="settings-label">Minimize to tray</label>
+            <span id="desc-minimizeToTray" class="settings-desc">Keep WaveRPC running when the main window is closed.</span>
+          </div>
+          <div class="settings-control">
+            <span id="feedback-minimizeToTray" class="saving-feedback" aria-live="polite"></span>
+            <label class="switch">
+              <input type="checkbox" id="setting-minimizeToTray" aria-describedby="desc-minimizeToTray">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Launch at Startup -->
+        <div class="settings-row">
+          <div class="settings-info">
+            <label for="setting-launchAtStartup" class="settings-label">Launch at startup</label>
+            <span id="desc-launchAtStartup" class="settings-desc">Start WaveRPC automatically when you sign in to Windows.</span>
+          </div>
+          <div class="settings-control">
+            <span id="feedback-launchAtStartup" class="saving-feedback" aria-live="polite"></span>
+            <label class="switch">
+              <input type="checkbox" id="setting-launchAtStartup" aria-describedby="desc-launchAtStartup">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Start Minimized -->
+        <div class="settings-row">
+          <div class="settings-info">
+            <label for="setting-startMinimized" class="settings-label">Start minimized</label>
+            <span id="desc-startMinimized" class="settings-desc">Launch WaveRPC directly in the system tray.</span>
+          </div>
+          <div class="settings-control">
+            <span id="feedback-startMinimized" class="saving-feedback" aria-live="polite"></span>
+            <label class="switch">
+              <input type="checkbox" id="setting-startMinimized" aria-describedby="desc-startMinimized">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <p class="settings-note">Settings are saved locally. Startup behavior will be enabled in the next phase.</p>
+    </section>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p class="footer-text">Local-first • No telemetry</p>
+      <p class="footer-text">Playback metadata stays on this device.</p>
+    </footer>
+
+  </div>
+</body>
+</html>

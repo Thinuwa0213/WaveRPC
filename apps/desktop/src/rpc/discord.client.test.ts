@@ -330,4 +330,52 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
 
     await client.disconnect();
   });
+
+  it('12. Missing Client ID: connect should abort early and skip socket connection', async () => {
+    let connectCalled = false;
+    mock.method(net, 'createConnection', () => {
+      connectCalled = true;
+      return new MockSocket('mock');
+    });
+
+    const client = new DiscordRPCClient({ clientId: '', autoReconnect: true });
+    const connected = await client.connect();
+
+    assert.strictEqual(connected, false);
+    assert.strictEqual(connectCalled, false, 'Should not attempt network or pipe connection');
+    assert.strictEqual(client.ConnectionState, 'DISCONNECTED');
+    assert.strictEqual((client as any).reconnectTimer, null, 'Should not schedule reconnect');
+  });
+
+  it('13. Placeholder Client ID: connect should abort early and skip socket connection', async () => {
+    let connectCalled = false;
+    mock.method(net, 'createConnection', () => {
+      connectCalled = true;
+      return new MockSocket('mock');
+    });
+
+    const client = new DiscordRPCClient({ clientId: '123456789012345678', autoReconnect: true });
+    const connected = await client.connect();
+
+    assert.strictEqual(connected, false);
+    assert.strictEqual(connectCalled, false, 'Should not attempt network or pipe connection');
+    assert.strictEqual(client.ConnectionState, 'DISCONNECTED');
+    assert.strictEqual((client as any).reconnectTimer, null, 'Should not schedule reconnect');
+  });
+
+  it('14. Invalid non-numeric Client ID: connect should abort early', async () => {
+    let connectCalled = false;
+    mock.method(net, 'createConnection', () => {
+      connectCalled = true;
+      return new MockSocket('mock');
+    });
+
+    const client = new DiscordRPCClient({ clientId: 'not-numeric-id', autoReconnect: true });
+    const connected = await client.connect();
+
+    assert.strictEqual(connected, false);
+    assert.strictEqual(connectCalled, false, 'Should not attempt network or pipe connection');
+    assert.strictEqual(client.ConnectionState, 'DISCONNECTED');
+    assert.strictEqual((client as any).reconnectTimer, null, 'Should not schedule reconnect');
+  });
 });

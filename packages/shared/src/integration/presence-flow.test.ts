@@ -1,7 +1,7 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
-import { TypedEventEmitter } from '../index.js';
+import { TypedEventEmitter, Logger } from '../index.js';
 
 // Declaring require as any to avoid any TS compiler warnings
 declare const require: any;
@@ -13,6 +13,7 @@ class MockSocket extends EventEmitter {
   public destroyed = false;
   public failNextWrite = false;
   public writtenPackets: Array<{ opcode: number; payload: any }> = [];
+  public autoReply = true;
 
   public write(data: Buffer): boolean {
     if (this.destroyed) return false;
@@ -29,6 +30,24 @@ class MockSocket extends EventEmitter {
         const payloadStr = payloadBuffer.toString('utf-8');
         const payload = JSON.parse(payloadStr);
         this.writtenPackets.push({ opcode, payload });
+
+        if (this.autoReply && opcode === 1 && payload.nonce) {
+          process.nextTick(() => {
+            const responsePayload = {
+              cmd: payload.cmd,
+              evt: null,
+              nonce: payload.nonce,
+              data: {},
+            };
+            const responseJson = JSON.stringify(responsePayload);
+            const responseData = Buffer.from(responseJson, 'utf-8');
+            const responseHeader = Buffer.alloc(8);
+            responseHeader.writeInt32LE(1, 0);
+            responseHeader.writeInt32LE(responseData.length, 4);
+            const responsePacket = Buffer.concat([responseHeader, responseData]);
+            this.emit('data', responsePacket);
+          });
+        }
       }
     } catch {
       // Ignore parse errors
@@ -80,7 +99,7 @@ describe('Presence Flow Integration Tests', () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
     const manager = new PresenceManager(events, {
-      clientId: '123456789012345678',
+      clientId: '999999999999999999',
     });
 
     const initialized = await manager.initialize();
@@ -90,7 +109,7 @@ describe('Presence Flow Integration Tests', () => {
     assert.ok(mockSocket.writtenPackets.length >= 1, 'Should have sent at least one packet');
     const handshakePacket = mockSocket.writtenPackets[0];
     assert.strictEqual(handshakePacket.opcode, 0, 'Opcode 0 is expected for handshake');
-    assert.strictEqual(handshakePacket.payload.client_id, '123456789012345678');
+    assert.strictEqual(handshakePacket.payload.client_id, '999999999999999999');
 
     // Reset packets log to verify next messages specifically
     mockSocket.writtenPackets = [];
@@ -123,12 +142,13 @@ describe('Presence Flow Integration Tests', () => {
     const activity = setActivityPacket.payload.args.activity;
     assert.ok(activity, 'Activity object should be present');
     assert.strictEqual(activity.details, 'Synthwave Dreams');
-    assert.strictEqual(activity.state, 'by Wave Artist');
+    assert.strictEqual(activity.state, 'Wave Artist');
+    assert.strictEqual(activity.type, 2);
 
     // Verify sanitized track URL (sensitive query parameters removed)
     assert.ok(activity.buttons && activity.buttons.length === 1);
     const listenButton = activity.buttons[0];
-    assert.strictEqual(listenButton.label, 'Listen on Soundcloud');
+    assert.strictEqual(listenButton.label, 'Listen on SoundCloud');
 
     const parsedUrl = new URL(listenButton.url);
     assert.strictEqual(
@@ -154,7 +174,7 @@ describe('Presence Flow Integration Tests', () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
     const manager = new PresenceManager(events, {
-      clientId: '123456789012345678',
+      clientId: '999999999999999999',
     });
 
     await manager.initialize();
@@ -195,14 +215,16 @@ describe('Presence Flow Integration Tests', () => {
     );
     assert.ok(pausePacket, 'Should have sent activity update for pause');
     const pauseActivity = pausePacket.payload.args.activity;
-    assert.strictEqual(pauseActivity.state, 'by Wave Artist (Paused)');
+    assert.strictEqual(pauseActivity.state, 'Wave Artist • Paused');
     assert.strictEqual(
       pauseActivity.timestamps,
       undefined,
       'Paused state should not have timestamps'
     );
-    assert.strictEqual(pauseActivity.assets.small_image, 'pause_icon');
-    assert.strictEqual(pauseActivity.assets.small_text, 'Paused');
+    assert.deepStrictEqual(pauseActivity.assets, {
+      large_image: 'https://i1.sndcdn.com/artworks-0001.jpg',
+      large_text: 'SoundCloud',
+    });
 
     // Clear packets list
     mockSocket.writtenPackets = [];
@@ -225,13 +247,13 @@ describe('Presence Flow Integration Tests', () => {
     );
     assert.ok(playPacket, 'Should have sent activity update for play');
     const playActivity = playPacket.payload.args.activity;
-    assert.strictEqual(playActivity.state, 'by Wave Artist');
+    assert.strictEqual(playActivity.state, 'Wave Artist');
     assert.ok(
       playActivity.timestamps && typeof playActivity.timestamps.start === 'number',
       'Playing state should have start timestamp'
     );
-    assert.strictEqual(playActivity.assets.small_image, 'play_icon');
-    assert.strictEqual(playActivity.assets.small_text, 'Playing');
+    assert.strictEqual(playActivity.assets?.small_image, undefined);
+    assert.strictEqual(playActivity.assets?.small_text, undefined);
 
     await manager.shutdown();
   });
@@ -240,7 +262,7 @@ describe('Presence Flow Integration Tests', () => {
   it('should suppress duplicate presence updates for identical track state', async () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
-    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
     await manager.initialize();
 
     mockSocket.writtenPackets = [];
@@ -282,7 +304,7 @@ describe('Presence Flow Integration Tests', () => {
   it('should retry presence update if initial setActivity call fails', async () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
-    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
     await manager.initialize();
     await new Promise((r) => setTimeout(r, 20)); // Ensure connection handshake write completes
 
@@ -325,7 +347,7 @@ describe('Presence Flow Integration Tests', () => {
   it('should suppress duplicate TRACK_CLEAR calls when presence is already cleared', async () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
-    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
     await manager.initialize();
     await new Promise((r) => setTimeout(r, 20));
 
@@ -372,7 +394,7 @@ describe('Presence Flow Integration Tests', () => {
   it('should retry clearActivity if initial clear attempt fails', async () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
-    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
     await manager.initialize();
     await new Promise((r) => setTimeout(r, 20));
 
@@ -414,7 +436,7 @@ describe('Presence Flow Integration Tests', () => {
   it('should maintain stable startTimestamp across repeated updates for the same track', async () => {
     const events = new TypedEventEmitter();
     const handler = new ExtensionMessageHandler(events);
-    const manager = new PresenceManager(events, { clientId: '123456789012345678' });
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
     await manager.initialize();
 
     const trackMsg = {
@@ -482,23 +504,12 @@ describe('Presence Flow Integration Tests', () => {
       const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud');
       assert.ok(activity);
       assert.strictEqual(activity.details, 'No Artwork Track');
-      assert.strictEqual(activity.state, 'by No Artwork Artist');
+      assert.strictEqual(activity.state, 'No Artwork Artist');
       assert.strictEqual(
-        activity.assets?.large_image,
+        activity.assets,
         undefined,
-        'large_image should be undefined when artwork is missing or empty'
+        'assets should be undefined when artwork is missing or empty'
       );
-      assert.notStrictEqual(
-        activity.assets?.large_image,
-        'default_music',
-        'should not produce fake default_music image'
-      );
-      assert.strictEqual(
-        activity.assets?.large_text,
-        undefined,
-        'large_text should be undefined when artwork is missing or empty'
-      );
-      assert.strictEqual(activity.assets?.small_image, 'play_icon');
     }
   });
 
@@ -542,6 +553,541 @@ describe('Presence Flow Integration Tests', () => {
       );
       const emptyUrlButton = activity.buttons?.find((b: any) => b.url === '');
       assert.strictEqual(emptyUrlButton, undefined, 'no button with url: "" should exist');
+    }
+  });
+
+  it('should calculate timestamps using playbackPosition correctly', () => {
+    const track = {
+      title: 'Position Track',
+      artist: 'Position Artist',
+      url: 'https://soundcloud.com/artist/position',
+      duration: 180000,
+      isPlaying: true,
+      playbackPosition: 45000,
+    };
+
+    const startTime = 1000000;
+    const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud', startTime);
+    assert.ok(activity);
+    assert.ok(activity.timestamps);
+    assert.strictEqual(activity.timestamps.start, startTime - 45000);
+    assert.strictEqual(activity.timestamps.end, startTime - 45000 + 180000);
+  });
+
+  it('should omit Listen button when track URL is invalid', () => {
+    const track = {
+      title: 'Invalid URL Track',
+      artist: 'Artist',
+      url: 'ftp://invalid-url.com',
+      isPlaying: true,
+    };
+
+    const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud');
+    assert.ok(activity);
+    assert.strictEqual(activity.buttons, undefined);
+  });
+
+  it('matching SET_ACTIVITY ACK resolves true', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+    const success = await (manager as any).rpcClient.setActivity(track);
+    assert.strictEqual(success, true, 'setActivity should resolve true on successful ACK');
+    await manager.shutdown();
+  });
+
+  it('unrelated DISPATCH frame does not resolve request', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.autoReply = false;
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+
+    const promise = (manager as any).rpcClient.setActivity(track);
+
+    // Write unrelated DISPATCH frame
+    const dispatchPayload = {
+      cmd: 'DISPATCH',
+      evt: 'READY',
+      nonce: null,
+      data: {},
+    };
+    const responseJson = JSON.stringify(dispatchPayload);
+    const responseData = Buffer.from(responseJson, 'utf-8');
+    const responseHeader = Buffer.alloc(8);
+    responseHeader.writeInt32LE(1, 0);
+    responseHeader.writeInt32LE(responseData.length, 4);
+    const responsePacket = Buffer.concat([responseHeader, responseData]);
+
+    mockSocket.emit('data', responsePacket);
+
+    let settled = false;
+    promise.then(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.strictEqual(settled, false, 'unrelated DISPATCH frame should not resolve the promise');
+
+    // Now send the correct ACK to resolve it
+    const lastWrite = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+    const nonce = lastWrite.payload.nonce;
+    const ackPayload = {
+      cmd: 'SET_ACTIVITY',
+      evt: null,
+      nonce: nonce,
+      data: {},
+    };
+    const ackJson = JSON.stringify(ackPayload);
+    const ackData = Buffer.from(ackJson, 'utf-8');
+    const ackHeader = Buffer.alloc(8);
+    ackHeader.writeInt32LE(1, 0);
+    ackHeader.writeInt32LE(ackData.length, 4);
+    const ackPacket = Buffer.concat([ackHeader, ackData]);
+    mockSocket.emit('data', ackPacket);
+
+    const success = await promise;
+    assert.strictEqual(success, true, 'matching SET_ACTIVITY ACK should resolve the promise');
+
+    await manager.shutdown();
+  });
+
+  it('Discord error ACK resolves false', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.autoReply = false;
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+
+    const promise = (manager as any).rpcClient.setActivity(track);
+
+    const lastWrite = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+    const nonce = lastWrite.payload.nonce;
+    const errorPayload = {
+      cmd: 'SET_ACTIVITY',
+      evt: 'ERROR',
+      nonce: nonce,
+      data: {
+        code: 4000,
+        message: 'Invalid Client ID',
+      },
+    };
+    const errorJson = JSON.stringify(errorPayload);
+    const errorData = Buffer.from(errorJson, 'utf-8');
+    const errorHeader = Buffer.alloc(8);
+    errorHeader.writeInt32LE(1, 0);
+    errorHeader.writeInt32LE(errorData.length, 4);
+    const errorPacket = Buffer.concat([errorHeader, errorData]);
+    mockSocket.emit('data', errorPacket);
+
+    const success = await promise;
+    assert.strictEqual(success, false, 'Discord error ACK should resolve false');
+
+    await manager.shutdown();
+  });
+
+  it('timeout resolves false', async () => {
+    const { mock } = require('node:test');
+    mock.timers.enable();
+    try {
+      const events = new TypedEventEmitter();
+      const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+      await manager.initialize();
+
+      mockSocket.autoReply = false;
+
+      const track = {
+        title: 'Track A',
+        artist: 'Artist A',
+        url: 'https://soundcloud.com/artist/a',
+        isPlaying: true,
+      };
+
+      const promise = (manager as any).rpcClient.setActivity(track);
+
+      // Advance timers by 5000ms
+      mock.timers.tick(5000);
+
+      const success = await promise;
+      assert.strictEqual(success, false, 'command should resolve false on timeout');
+
+      await manager.shutdown();
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('socket disconnect resolves pending requests false', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.autoReply = false;
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+
+    const promise = (manager as any).rpcClient.setActivity(track);
+
+    // Simulate socket disconnect
+    mockSocket.destroy();
+
+    const success = await promise;
+    assert.strictEqual(success, false, 'disconnect should resolve pending requests false');
+
+    await manager.shutdown();
+  });
+
+  it('partial frame parsing', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.autoReply = false;
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+
+    const promise = (manager as any).rpcClient.setActivity(track);
+    const lastWrite = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+    const nonce = lastWrite.payload.nonce;
+
+    const responsePayload = {
+      cmd: 'SET_ACTIVITY',
+      evt: null,
+      nonce: nonce,
+      data: {},
+    };
+    const responseJson = JSON.stringify(responsePayload);
+    const responseData = Buffer.from(responseJson, 'utf-8');
+    const responseHeader = Buffer.alloc(8);
+    responseHeader.writeInt32LE(1, 0);
+    responseHeader.writeInt32LE(responseData.length, 4);
+    const responsePacket = Buffer.concat([responseHeader, responseData]);
+
+    // Send first 4 bytes of header
+    mockSocket.emit('data', responsePacket.subarray(0, 4));
+    // Send next 8 bytes
+    mockSocket.emit('data', responsePacket.subarray(4, 12));
+    // Send the remainder
+    mockSocket.emit('data', responsePacket.subarray(12));
+
+    const success = await promise;
+    assert.strictEqual(
+      success,
+      true,
+      'partial frame parsing should successfully reconstruct the frame'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('multiple frames in one chunk', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.autoReply = false;
+
+    const track = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    };
+
+    const promise = (manager as any).rpcClient.setActivity(track);
+    const lastWrite = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+    const nonce = lastWrite.payload.nonce;
+
+    // Create frame 1 (unrelated)
+    const unrelatedPayload = {
+      cmd: 'DISPATCH',
+      evt: 'READY',
+      nonce: null,
+      data: {},
+    };
+    const unrelatedJson = JSON.stringify(unrelatedPayload);
+    const unrelatedData = Buffer.from(unrelatedJson, 'utf-8');
+    const unrelatedHeader = Buffer.alloc(8);
+    unrelatedHeader.writeInt32LE(1, 0);
+    unrelatedHeader.writeInt32LE(unrelatedData.length, 4);
+    const unrelatedPacket = Buffer.concat([unrelatedHeader, unrelatedData]);
+
+    // Create frame 2 (matching ACK)
+    const responsePayload = {
+      cmd: 'SET_ACTIVITY',
+      evt: null,
+      nonce: nonce,
+      data: {},
+    };
+    const responseJson = JSON.stringify(responsePayload);
+    const responseData = Buffer.from(responseJson, 'utf-8');
+    const responseHeader = Buffer.alloc(8);
+    responseHeader.writeInt32LE(1, 0);
+    responseHeader.writeInt32LE(responseData.length, 4);
+    const responsePacket = Buffer.concat([responseHeader, responseData]);
+
+    // Send both concatenated
+    mockSocket.emit('data', Buffer.concat([unrelatedPacket, responsePacket]));
+
+    const success = await promise;
+    assert.strictEqual(success, true, 'multiple frames in one chunk should be parsed successfully');
+
+    await manager.shutdown();
+  });
+
+  it('malformed/excessive payload guard', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    // Create an invalid header with excessive length (20MB)
+    const header = Buffer.alloc(8);
+    header.writeInt32LE(1, 0);
+    header.writeInt32LE(20 * 1024 * 1024, 4);
+
+    mockSocket.emit('data', header);
+
+    // Verify buffer was discarded/cleared and client did not crash
+    assert.strictEqual(
+      (manager as any).rpcClient.buffer.length,
+      0,
+      'excessive payload length should clear the buffer'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('active track -> clear sends exactly one clear', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    mockSocket.writtenPackets = [];
+
+    // Send active track
+    handler.handleMessage(
+      JSON.stringify({
+        type: 'TRACK_UPDATE',
+        payload: {
+          title: 'Track A',
+          artist: 'Artist A',
+          url: 'https://soundcloud.com/artist/a',
+          isPlaying: true,
+          providerId: 'soundcloud',
+        },
+      })
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    mockSocket.writtenPackets = [];
+
+    // Clear track
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const clears = mockSocket.writtenPackets.filter(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity === null
+    );
+    assert.strictEqual(clears.length, 1, 'should send exactly one clear command');
+
+    await manager.shutdown();
+  });
+
+  it('repeated clear after successful clear is skipped', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    // Send active track
+    handler.handleMessage(
+      JSON.stringify({
+        type: 'TRACK_UPDATE',
+        payload: {
+          title: 'Track A',
+          artist: 'Artist A',
+          url: 'https://soundcloud.com/artist/a',
+          isPlaying: true,
+          providerId: 'soundcloud',
+        },
+      })
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Send first clear
+    mockSocket.writtenPackets = [];
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(
+      mockSocket.writtenPackets.filter((p: any) => p.payload.args.activity === null).length,
+      1
+    );
+
+    // Send second clear
+    mockSocket.writtenPackets = [];
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(
+      mockSocket.writtenPackets.filter((p: any) => p.payload.args.activity === null).length,
+      0,
+      'second clear should be skipped'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('track A -> clear -> track B race leaves B active', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    // Set Track A
+    handler.handleMessage(
+      JSON.stringify({
+        type: 'TRACK_UPDATE',
+        payload: {
+          title: 'Track A',
+          artist: 'Artist A',
+          url: 'https://soundcloud.com/artist/a',
+          isPlaying: true,
+          providerId: 'soundcloud',
+        },
+      })
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    mockSocket.autoReply = false;
+    mockSocket.writtenPackets = [];
+
+    // Send clear command
+    handler.handleMessage(JSON.stringify({ type: 'TRACK_CLEAR' }));
+
+    // Immediately send Track B update
+    handler.handleMessage(
+      JSON.stringify({
+        type: 'TRACK_UPDATE',
+        payload: {
+          title: 'Track B',
+          artist: 'Artist B',
+          url: 'https://soundcloud.com/artist/b',
+          isPlaying: true,
+          providerId: 'soundcloud',
+        },
+      })
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.strictEqual(mockSocket.writtenPackets.length, 2);
+    const clearNonce = mockSocket.writtenPackets[0].payload.nonce;
+    const trackBNonce = mockSocket.writtenPackets[1].payload.nonce;
+
+    // Send ACK for Track B first
+    const ackB = { cmd: 'SET_ACTIVITY', evt: null, nonce: trackBNonce, data: {} };
+    const ackBJson = JSON.stringify(ackB);
+    const ackBData = Buffer.from(ackBJson, 'utf-8');
+    const ackBHeader = Buffer.alloc(8);
+    ackBHeader.writeInt32LE(1, 0);
+    ackBHeader.writeInt32LE(ackBData.length, 4);
+    mockSocket.emit('data', Buffer.concat([ackBHeader, ackBData]));
+
+    // Send ACK for CLEAR command
+    const ackClear = { cmd: 'SET_ACTIVITY', evt: null, nonce: clearNonce, data: {} };
+    const ackClearJson = JSON.stringify(ackClear);
+    const ackClearData = Buffer.from(ackClearJson, 'utf-8');
+    const ackClearHeader = Buffer.alloc(8);
+    ackClearHeader.writeInt32LE(1, 0);
+    ackClearHeader.writeInt32LE(ackClearData.length, 4);
+    mockSocket.emit('data', Buffer.concat([ackClearHeader, ackClearData]));
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.strictEqual(
+      (manager as any).presenceState,
+      'ACTIVE',
+      'final presenceState must be ACTIVE'
+    );
+    assert.strictEqual(
+      (manager as any).activeActivity.details,
+      'Track B',
+      'final activity details must be Track B'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('reconnect resets confirmed remote state safely', async () => {
+    const events = new TypedEventEmitter();
+    const manager = new PresenceManager(events, { clientId: '999999999999999999' });
+    await manager.initialize();
+
+    // Set presence first via track:changed event
+    events.emit('track:changed', {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist/a',
+      isPlaying: true,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual((manager as any).presenceState, 'ACTIVE');
+
+    // Simulate disconnect
+    mockSocket.emit('close');
+    assert.strictEqual(
+      (manager as any).presenceState,
+      'UNKNOWN',
+      'state must reset to UNKNOWN on disconnect'
+    );
+
+    await manager.shutdown();
+  });
+
+  it('PING has no info-level noise', () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const originalInfo = Logger.prototype.info;
+    let infoLogged = false;
+    Logger.prototype.info = () => {
+      infoLogged = true;
+    };
+    try {
+      handler.handleMessage(JSON.stringify({ type: 'PING' }));
+      assert.strictEqual(infoLogged, false, 'PING should not produce info-level logs');
+    } finally {
+      Logger.prototype.info = originalInfo;
     }
   });
 });

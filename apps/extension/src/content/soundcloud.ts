@@ -10,12 +10,51 @@ export class SoundCloudPageDetector {
   private lastIsPlaying: boolean | null = null;
   private hasActiveTrack: boolean = false;
   private observer: MutationObserver | null = null;
+  private bodyObserver: MutationObserver | null = null;
+  private disposed: boolean = false;
+  private sourceSessionId: string = crypto.randomUUID();
+  private audioListeners: Array<{
+    audio: HTMLAudioElement;
+    event: string;
+    listener: () => void;
+  }> = [];
 
   public initialize(): void {
     log.info('Initializing detector observer...');
     this.detectAndSend();
     this.setupDOMObserver();
     this.setupAudioListeners();
+
+    const handleUnload = () => {
+      this.dispose();
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+  }
+
+  public dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    log.info('Disposing detector...');
+
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    if (this.bodyObserver) {
+      this.bodyObserver.disconnect();
+      this.bodyObserver = null;
+    }
+
+    this.audioListeners.forEach(({ audio, event, listener }) => {
+      try {
+        audio.removeEventListener(event, listener);
+      } catch {
+        // Ignore errors during tab teardown
+      }
+    });
+    this.audioListeners = [];
   }
 
   public detectTrackPayload(): ExtensionTrackPayload | null {
@@ -105,6 +144,11 @@ export class SoundCloudPageDetector {
       duration = Math.round(audioElement.duration * 1000);
     }
 
+    let playbackPosition: number | undefined;
+    if (audioElement && !isNaN(audioElement.currentTime)) {
+      playbackPosition = Math.round(audioElement.currentTime * 1000);
+    }
+
     if (!title || !artist) {
       log.debug('Metadata unavailable: missing title or artist.');
       return null;
@@ -117,11 +161,13 @@ export class SoundCloudPageDetector {
       artwork,
       duration,
       isPlaying,
+      playbackPosition,
       providerId: 'soundcloud',
     };
   }
 
   public detectAndSend(): void {
+    if (this.disposed) return;
     const payload = this.detectTrackPayload();
 
     if (!payload) {
@@ -143,7 +189,6 @@ export class SoundCloudPageDetector {
       return;
     }
 
-    // Determine what changed for logging
     const oldSignature = this.lastTrackSignature;
     const playbackChanged = this.lastIsPlaying !== null && this.lastIsPlaying !== payload.isPlaying;
     this.lastTrackSignature = signature;
@@ -174,6 +219,7 @@ export class SoundCloudPageDetector {
   private setupDOMObserver(): void {
     const targetNode = document.querySelector('.playControls') || document.body;
     this.observer = new MutationObserver(() => {
+      if (this.disposed) return;
       this.detectAndSend();
     });
 
@@ -189,7 +235,12 @@ export class SoundCloudPageDetector {
     const attachToAudio = (audio: HTMLAudioElement) => {
       const events = ['play', 'pause', 'playing', 'ended'];
       events.forEach((evtName) => {
-        audio.addEventListener(evtName, () => this.detectAndSend());
+        const listener = () => {
+          if (this.disposed) return;
+          this.detectAndSend();
+        };
+        audio.addEventListener(evtName, listener);
+        this.audioListeners.push({ audio, event: evtName, listener });
       });
     };
 
@@ -198,7 +249,8 @@ export class SoundCloudPageDetector {
       attachToAudio(existingAudio);
     }
 
-    const bodyObserver = new MutationObserver((mutations) => {
+    this.bodyObserver = new MutationObserver((mutations) => {
+      if (this.disposed) return;
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeName === 'AUDIO') {
@@ -208,12 +260,17 @@ export class SoundCloudPageDetector {
       });
     });
 
-    bodyObserver.observe(document.body, { childList: true, subtree: true });
+    this.bodyObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  private sendToBackground(message: unknown): void {
+  private sendToBackground(message: any): void {
+    if (this.disposed) return;
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage(message, (_response: unknown) => {
+      const msgWithSession = {
+        ...message,
+        sourceSessionId: this.sourceSessionId,
+      };
+      chrome.runtime.sendMessage(msgWithSession, (_response: unknown) => {
         if (chrome.runtime.lastError) {
           // Ignored if background script is sleeping
         }

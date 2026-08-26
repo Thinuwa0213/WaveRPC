@@ -6,13 +6,30 @@ export class PrivacySanitizer {
    * Strips authentication query parameters, access tokens, and limits text length.
    */
   public static sanitizeTrack(track: Track): Track {
+    const sanitizedDuration =
+      track.duration && track.duration > 0 ? Math.round(track.duration) : undefined;
+
+    let playbackPosition: number | undefined;
+    if (
+      track.playbackPosition !== undefined &&
+      typeof track.playbackPosition === 'number' &&
+      Number.isFinite(track.playbackPosition) &&
+      track.playbackPosition >= 0
+    ) {
+      playbackPosition = Math.round(track.playbackPosition);
+      if (sanitizedDuration !== undefined && playbackPosition > sanitizedDuration) {
+        playbackPosition = sanitizedDuration;
+      }
+    }
+
     return {
       title: this.cleanText(track.title, 128),
       artist: this.cleanText(track.artist, 128),
       url: this.sanitizeUrl(track.url),
       artwork: track.artwork ? this.sanitizeUrl(track.artwork) : undefined,
-      duration: track.duration && track.duration > 0 ? Math.round(track.duration) : undefined,
+      duration: sanitizedDuration,
       isPlaying: Boolean(track.isPlaying),
+      playbackPosition,
     };
   }
 
