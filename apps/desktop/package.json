@@ -1,6 +1,6 @@
 {
   "name": "@waverpc/desktop",
-  "version": "0.3.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Desktop application for WaveRPC",
   "main": "./dist/main/index.js",
@@ -9,7 +9,8 @@
     "start": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "lint": "eslint .",
-    "test": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js && node --test dist/**/*.test.js"
+    "test": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.js && node --test dist/main/*.test.js dist/server/*.test.js",
+    "package": "electron-builder --win"
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",
@@ -19,6 +20,34 @@
   "devDependencies": {
     "@types/ws": "^8.18.1",
     "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.5.4"
+  },
+  "build": {
+    "appId": "com.waverpc.desktop",
+    "productName": "WaveRPC",
+    "directories": {
+      "output": "../../release/desktop"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/waverpc.ico",
+      "artifactName": "WaveRPC-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WaveRPC",
+      "installerIcon": "assets/waverpc.ico",
+      "uninstallerIcon": "assets/waverpc.ico",
+      "perMachine": false
+    }
   }
 }

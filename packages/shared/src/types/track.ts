@@ -6,4 +6,6 @@ export interface Track {
   duration?: number;
   isPlaying: boolean;
   playbackPosition?: number;
+  timingObservedAt?: number;
+  timingSource?: 'media-element' | 'soundcloud-dom' | 'cache-derived' | 'unavailable';
 }

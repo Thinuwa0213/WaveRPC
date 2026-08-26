@@ -65,16 +65,6 @@ export class StatusService {
           this.status.extension.connected = false;
           changed = true;
         }
-        if (this.status.provider.active) {
-          this.status.provider.active = false;
-          this.status.provider.id = undefined;
-          this.status.provider.name = undefined;
-          changed = true;
-        }
-        if (this.status.track !== undefined) {
-          this.status.track = undefined;
-          changed = true;
-        }
         if (changed) {
           this.notify();
         }

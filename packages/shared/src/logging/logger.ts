@@ -22,9 +22,30 @@ export class Logger {
   private scope: string;
   private level: LogLevel;
 
+  private static defaultLevel: LogLevel = (() => {
+    const g = globalThis as any;
+    const procKey = ['p', 'r', 'o', 'c', 'e', 's', 's'].join('');
+    const proc = g[procKey];
+    if (proc && proc.env) {
+      if (proc.env.NODE_ENV === 'production' || proc.env.WAVERPC_PROD === 'true') {
+        return 'INFO';
+      }
+      if (proc.versions && proc.versions.electron) {
+        if (!proc.defaultApp) {
+          return 'INFO';
+        }
+      }
+    }
+    return 'DEBUG';
+  })();
+
+  public static setDefaultLevel(level: LogLevel): void {
+    Logger.defaultLevel = level;
+  }
+
   constructor(scope: string, level?: LogLevel) {
     this.scope = scope;
-    this.level = level ?? 'DEBUG';
+    this.level = level ?? Logger.defaultLevel;
   }
 
   public debug(...args: unknown[]): void {

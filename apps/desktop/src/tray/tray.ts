@@ -10,6 +10,10 @@ export class WaveRPCTray {
   private tray: Tray | null = null;
   private lastDisplayedStatusStr: string = '';
 
+  private statusHandler = (status: WaveRPCStatus) => {
+    this.updateTrayMenu(status);
+  };
+
   constructor(
     private appCoordinator: ElectronApp,
     private events: TypedEventEmitter
@@ -54,9 +58,7 @@ export class WaveRPCTray {
   }
 
   private setupStatusListener(): void {
-    this.events.on('status:changed', (status) => {
-      this.updateTrayMenu(status);
-    });
+    this.events.on('status:changed', this.statusHandler);
   }
 
   private updateTrayMenu(status?: WaveRPCStatus): void {
@@ -94,6 +96,7 @@ export class WaveRPCTray {
   }
 
   public destroy(): void {
+    this.events.off('status:changed', this.statusHandler);
     if (this.tray) {
       log.info('Destroying system tray.');
       this.tray.destroy();

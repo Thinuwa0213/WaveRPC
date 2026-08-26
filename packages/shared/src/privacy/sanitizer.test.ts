@@ -60,4 +60,38 @@ describe('PrivacySanitizer Test Suite', () => {
     assert.strictEqual(sanitized.duration, 243000);
     assert.strictEqual(sanitized.isPlaying, true);
   });
+
+  it('should preserve and clamp valid duration and playbackPosition properties', () => {
+    const rawTrack: Track = {
+      title: 'Midnight City',
+      artist: 'M83',
+      url: 'https://soundcloud.com/m83/midnight-city',
+      duration: 243000,
+      isPlaying: true,
+      playbackPosition: 250000, // greater than duration
+    };
+
+    const sanitized = PrivacySanitizer.sanitizeTrack(rawTrack);
+    assert.strictEqual(sanitized.duration, 243000, 'Should preserve duration');
+    assert.strictEqual(
+      sanitized.playbackPosition,
+      243000,
+      'Should clamp playbackPosition to duration'
+    );
+
+    const rawTrackNoDuration: Track = {
+      title: 'Midnight City',
+      artist: 'M83',
+      url: 'https://soundcloud.com/m83/midnight-city',
+      isPlaying: true,
+      playbackPosition: 250000,
+    };
+    const sanitizedNoDuration = PrivacySanitizer.sanitizeTrack(rawTrackNoDuration);
+    assert.strictEqual(sanitizedNoDuration.duration, undefined, 'Duration should remain undefined');
+    assert.strictEqual(
+      sanitizedNoDuration.playbackPosition,
+      250000,
+      'Should preserve playbackPosition when duration is missing'
+    );
+  });
 });

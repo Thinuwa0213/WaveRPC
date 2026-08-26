@@ -1,6 +1,6 @@
 {
   "name": "@waverpc/config",
-  "version": "0.3.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Shared configuration for TypeScript, ESLint, and Prettier in WaveRPC monorepo",
   "main": "index.js",

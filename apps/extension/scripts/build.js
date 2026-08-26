@@ -14,6 +14,8 @@ function cleanDir(dir) {
 
 async function run() {
   const isTest = process.argv.includes('--test');
+  const isProd = process.argv.includes('--prod') || process.env.NODE_ENV === 'production';
+  const sourcemap = !isProd;
 
   console.log('Cleaning build directories...');
   cleanDir(distDir);
@@ -27,7 +29,7 @@ async function run() {
     '@waverpc/shared': path.resolve(rootDir, '../../packages/shared/src/index.ts'),
   };
 
-  console.log('Bundling extension assets...');
+  console.log(`Bundling extension assets (isProd: ${isProd})...`);
 
   // 1. Bundle background.ts (ESM)
   await esbuild.build({
@@ -37,7 +39,7 @@ async function run() {
     format: 'esm',
     platform: 'browser',
     target: 'es2022',
-    sourcemap: true,
+    sourcemap,
     alias,
   });
 
@@ -49,7 +51,7 @@ async function run() {
     format: 'iife',
     platform: 'browser',
     target: 'es2022',
-    sourcemap: true,
+    sourcemap,
     alias,
   });
 

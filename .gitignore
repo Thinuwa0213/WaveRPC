@@ -4,8 +4,10 @@ node_modules/
 
 # Build outputs
 dist/
+dist-test/
 build/
 out/
+release/
 
 # IDE & OS
 .vscode/

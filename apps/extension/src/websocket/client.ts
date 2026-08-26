@@ -13,9 +13,14 @@ export interface ExtensionWSClientOptions {
   url?: string;
   autoReconnect?: boolean;
   maxReconnectIntervalMs?: number;
+  onConnect?: () => void;
+  onDisconnect?: () => void;
 }
 
 export class ExtensionWSClient {
+  public onConnect: (() => void) | null = null;
+  public onDisconnect: (() => void) | null = null;
+  public onRequestState: (() => void) | null = null;
   private socket: WebSocket | null = null;
   private state: ConnectionState = 'DISCONNECTED';
   private url: string;
@@ -30,6 +35,12 @@ export class ExtensionWSClient {
     this.url = options?.url ?? 'ws://127.0.0.1:6124';
     this.autoReconnect = options?.autoReconnect ?? true;
     this.maxReconnectIntervalMs = options?.maxReconnectIntervalMs ?? 30000;
+    if (options?.onConnect) {
+      this.onConnect = options.onConnect;
+    }
+    if (options?.onDisconnect) {
+      this.onDisconnect = options.onDisconnect;
+    }
   }
 
   public get connectionState(): ConnectionState {
@@ -61,6 +72,14 @@ export class ExtensionWSClient {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
+
+        if (this.onConnect) {
+          try {
+            this.onConnect();
+          } catch (err) {
+            log.error('Error in onConnect handler:', err);
+          }
+        }
       };
 
       this.socket.onclose = () => {
@@ -70,6 +89,19 @@ export class ExtensionWSClient {
 
       this.socket.onerror = (error) => {
         log.warn('Socket error:', error);
+      };
+
+      this.socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message && message.type === 'REQUEST_STATE') {
+            if (this.onRequestState) {
+              this.onRequestState();
+            }
+          }
+        } catch (err: any) {
+          log.warn('Failed to parse incoming WS message:', err.message);
+        }
       };
     } catch (error) {
       log.error('Failed to create WebSocket connection:', error);
@@ -96,6 +128,10 @@ export class ExtensionWSClient {
   }
 
   public sendTrackUpdate(payload: ExtensionTrackPayload): boolean {
+    log.info('[DEV-LOG] Background sending TRACK_UPDATE to Desktop Bridge:', {
+      type: 'TRACK_UPDATE',
+      payload,
+    });
     return this.send({
       type: 'TRACK_UPDATE',
       payload,
@@ -138,6 +174,14 @@ export class ExtensionWSClient {
 
     if (this.autoReconnect) {
       this.scheduleReconnect();
+    }
+
+    if (this.onDisconnect) {
+      try {
+        this.onDisconnect();
+      } catch (err) {
+        log.error('Error in onDisconnect handler:', err);
+      }
     }
   }
 

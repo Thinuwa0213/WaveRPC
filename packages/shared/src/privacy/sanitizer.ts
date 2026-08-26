@@ -22,6 +22,25 @@ export class PrivacySanitizer {
       }
     }
 
+    let timingObservedAt: number | undefined;
+    if (
+      track.timingObservedAt !== undefined &&
+      typeof track.timingObservedAt === 'number' &&
+      Number.isFinite(track.timingObservedAt) &&
+      track.timingObservedAt > 0
+    ) {
+      timingObservedAt = Math.round(track.timingObservedAt);
+    }
+
+    let timingSource:
+      'media-element' | 'soundcloud-dom' | 'cache-derived' | 'unavailable' | undefined;
+    if (track.timingSource !== undefined) {
+      const validSources = ['media-element', 'soundcloud-dom', 'cache-derived', 'unavailable'];
+      if (validSources.includes(track.timingSource)) {
+        timingSource = track.timingSource as typeof timingSource;
+      }
+    }
+
     return {
       title: this.cleanText(track.title, 128),
       artist: this.cleanText(track.artist, 128),
@@ -30,6 +49,8 @@ export class PrivacySanitizer {
       duration: sanitizedDuration,
       isPlaying: Boolean(track.isPlaying),
       playbackPosition,
+      timingObservedAt,
+      timingSource,
     };
   }
 

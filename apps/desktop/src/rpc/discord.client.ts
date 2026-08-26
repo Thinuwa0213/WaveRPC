@@ -6,7 +6,7 @@ const log = new Logger('DiscordRPC');
 /** Maximum number of Discord IPC pipe endpoints to scan (0–9). */
 const MAX_IPC_PIPE_ID = 9;
 
-export type RPCConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED';
+export type RPCConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'HANDSHAKING' | 'READY';
 
 export interface DiscordRPCClientOptions {
   clientId: string;
@@ -32,8 +32,11 @@ export class DiscordRPCClient {
       resolve: (value: boolean) => void;
       timer: NodeJS.Timeout;
       cmd: string;
+      generation: number;
     }
   >();
+  private connectionGeneration = 0;
+  private connectingSocket: net.Socket | null = null;
 
   constructor(options: DiscordRPCClientOptions) {
     this.clientId = options.clientId;
@@ -63,8 +66,8 @@ export class DiscordRPCClient {
   }
 
   public async connect(): Promise<boolean> {
-    if (this.state === 'CONNECTED' || this.state === 'CONNECTING') {
-      return this.state === 'CONNECTED';
+    if (this.state === 'READY' || this.state === 'CONNECTING' || this.state === 'HANDSHAKING') {
+      return this.state === 'READY';
     }
 
     if (this.isPlaceholderOrInvalidClientId(this.clientId)) {
@@ -78,8 +81,14 @@ export class DiscordRPCClient {
     this.setState('CONNECTING');
     log.info(`Connecting to Discord IPC (Client ID: ${this.clientId})...`);
 
+    const generation = ++this.connectionGeneration;
+
     for (let pipeId = 0; pipeId <= MAX_IPC_PIPE_ID; pipeId++) {
-      const connected = await this.tryPipe(pipeId);
+      if (generation !== this.connectionGeneration) {
+        this.setState('DISCONNECTED');
+        return false;
+      }
+      const connected = await this.tryPipe(pipeId, generation);
       if (connected) {
         return true;
       }
@@ -88,7 +97,7 @@ export class DiscordRPCClient {
     log.warn('All Discord IPC pipes (0–9) unavailable.');
     this.setState('DISCONNECTED');
 
-    if (this.autoReconnect) {
+    if (this.autoReconnect && generation === this.connectionGeneration) {
       this.scheduleReconnect();
     }
 
@@ -97,6 +106,7 @@ export class DiscordRPCClient {
 
   public async disconnect(): Promise<void> {
     this.autoReconnect = false;
+    this.connectionGeneration++;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -110,12 +120,13 @@ export class DiscordRPCClient {
   }
 
   public async setActivity(activity: unknown): Promise<boolean> {
-    if (this.state !== 'CONNECTED' || !this.socket) {
-      log.warn('Cannot set activity: RPC Client is not connected.');
+    if (this.state !== 'READY' || !this.socket) {
+      log.warn('Cannot set activity: RPC Client is not ready.');
       return false;
     }
 
     const nonce = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 9);
+    const generation = this.connectionGeneration;
 
     return new Promise<boolean>((resolve) => {
       const payload = {
@@ -135,7 +146,7 @@ export class DiscordRPCClient {
         }
       }, 5000);
 
-      this.pendingRequests.set(nonce, { resolve, timer, cmd: 'SET_ACTIVITY' });
+      this.pendingRequests.set(nonce, { resolve, timer, cmd: 'SET_ACTIVITY', generation });
 
       const sent = this.sendPacket(1, payload);
       if (!sent) {
@@ -148,6 +159,10 @@ export class DiscordRPCClient {
 
   public async clearActivity(): Promise<boolean> {
     log.info('Clearing Discord activity...');
+    if (this.state !== 'READY') {
+      log.warn('Cannot clear activity: RPC Client is not ready.');
+      return false;
+    }
     const success = await this.setActivity(null);
     if (success) {
       log.info('Discord activity cleared.');
@@ -158,21 +173,39 @@ export class DiscordRPCClient {
     }
   }
 
-  private tryPipe(pipeId: number): Promise<boolean> {
+  private tryPipe(pipeId: number, generation: number): Promise<boolean> {
     return new Promise((resolve) => {
+      if (generation !== this.connectionGeneration) {
+        resolve(false);
+        return;
+      }
       const pipePath = this.getIPCPath(pipeId);
       log.debug(`Trying IPC pipe ${pipeId}: ${pipePath}`);
 
       let settled = false;
       const socket = net.createConnection(pipePath);
+      this.connectingSocket = socket;
 
       socket.once('connect', () => {
+        if (this.connectingSocket === socket) {
+          this.connectingSocket = null;
+        }
         if (settled) return;
         settled = true;
+
+        if (generation !== this.connectionGeneration) {
+          log.info(
+            `Connected to pipe ${pipeId} after disconnect/generation mismatch. Destroying socket.`
+          );
+          socket.destroy();
+          resolve(false);
+          return;
+        }
+
         log.info(`Connected to Discord IPC pipe ${pipeId}. Sending HANDSHAKE...`);
         this.socket = socket;
+        this.setState('HANDSHAKING');
         this.sendHandshake();
-        this.setState('CONNECTED');
 
         if (this.reconnectAttempts > 0) {
           log.info(
@@ -186,15 +219,27 @@ export class DiscordRPCClient {
           this.reconnectTimer = null;
         }
 
-        this.setupSocketListeners();
+        this.setupSocketListeners(socket, generation);
         resolve(true);
       });
 
       socket.once('error', (err: Error) => {
+        if (this.connectingSocket === socket) {
+          this.connectingSocket = null;
+        }
         if (settled) return;
         settled = true;
         log.debug(`Pipe ${pipeId} unavailable: ${err.message}`);
         socket.destroy();
+        resolve(false);
+      });
+
+      socket.once('close', () => {
+        if (this.connectingSocket === socket) {
+          this.connectingSocket = null;
+        }
+        if (settled) return;
+        settled = true;
         resolve(false);
       });
     });
@@ -227,24 +272,25 @@ export class DiscordRPCClient {
     }
   }
 
-  private setupSocketListeners(): void {
-    if (!this.socket) return;
-
-    this.socket.on('data', (data: Buffer) => {
-      this.handleSocketData(data);
+  private setupSocketListeners(socket: net.Socket, generation: number): void {
+    socket.on('data', (data: Buffer) => {
+      if (generation !== this.connectionGeneration) return;
+      this.handleSocketData(data, generation);
     });
 
-    this.socket.on('close', () => {
+    socket.on('close', () => {
+      if (generation !== this.connectionGeneration) return;
       log.info('Discord IPC socket closed.');
       this.handleDisconnect();
     });
 
-    this.socket.on('error', (err: Error) => {
+    socket.on('error', (err: Error) => {
+      if (generation !== this.connectionGeneration) return;
       log.error('Socket error:', err.message);
     });
   }
 
-  private handleSocketData(data: Buffer): void {
+  private handleSocketData(data: Buffer, generation: number): void {
     this.buffer = Buffer.concat([this.buffer, data]);
 
     const MAX_PAYLOAD_LENGTH = 10 * 1024 * 1024; // 10MB conservative limit
@@ -280,10 +326,19 @@ export class DiscordRPCClient {
           );
         }
 
+        if (cmd === 'DISPATCH' && evt === 'READY') {
+          if (generation === this.connectionGeneration) {
+            log.info('Discord READY received.');
+            this.setState('READY');
+          } else {
+            log.warn('Stale READY from old generation ignored.');
+          }
+        }
+
         if (nonce && this.pendingRequests.has(nonce)) {
           const req = this.pendingRequests.get(nonce)!;
 
-          if (cmd === req.cmd) {
+          if (cmd === req.cmd && req.generation === generation) {
             clearTimeout(req.timer);
             this.pendingRequests.delete(nonce);
 
@@ -310,7 +365,7 @@ export class DiscordRPCClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (!this.autoReconnect || this.reconnectTimer) return;
 
     this.reconnectAttempts++;
     const delay = Math.min(
@@ -332,6 +387,10 @@ export class DiscordRPCClient {
       this.socket.removeAllListeners();
       this.socket.destroy();
       this.socket = null;
+    }
+    if (this.connectingSocket) {
+      this.connectingSocket.destroy();
+      this.connectingSocket = null;
     }
     this.buffer = Buffer.alloc(0);
 

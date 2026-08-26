@@ -126,11 +126,15 @@ describe('StatusService Tests', () => {
     wsServer.clientsCount = 0;
     emittedSnapshots = [];
     events.emit('extension:disconnected');
-    const status = service.getStatus();
+    let status = service.getStatus();
+    assert.strictEqual(status.provider.active, true);
+    assert.strictEqual(status.provider.id, 'soundcloud');
+
+    events.emit('provider:deactivated', 'soundcloud');
+    status = service.getStatus();
     assert.strictEqual(status.provider.active, false);
     assert.strictEqual(status.provider.id, undefined);
     assert.strictEqual(status.provider.name, undefined);
-    assert.strictEqual(emittedSnapshots.length, 1);
   });
 
   it('7. Final extension disconnect clears active track', () => {
@@ -148,9 +152,12 @@ describe('StatusService Tests', () => {
     wsServer.clientsCount = 0;
     emittedSnapshots = [];
     events.emit('extension:disconnected');
-    const status = service.getStatus();
+    let status = service.getStatus();
+    assert.ok(status.track);
+
+    events.emit('track:changed', undefined);
+    status = service.getStatus();
     assert.strictEqual(status.track, undefined);
-    assert.strictEqual(emittedSnapshots.length, 1);
   });
 
   it('8. Provider activation', () => {
@@ -296,93 +303,107 @@ describe('StatusService Tests', () => {
     emittedSnapshots = [];
     events.emit('extension:disconnected');
 
+    // Extension connected status is false, but provider and track are temporarily preserved
     assert.strictEqual(service.getStatus().extension.connected, false);
+    assert.strictEqual(service.getStatus().provider.active, true);
+    assert.ok(service.getStatus().track);
+    assert.strictEqual(emittedSnapshots.length, 1);
+
+    // Cleared when change events are emitted
+    events.emit('track:changed', undefined);
+    events.emit('provider:deactivated', 'soundcloud');
     assert.strictEqual(service.getStatus().provider.active, false);
     assert.strictEqual(service.getStatus().track, undefined);
-    assert.strictEqual(emittedSnapshots.length, 1);
   });
 
   it('18. Full disconnect regression flow: final disconnect triggers cleanups', async () => {
-    const app = new WaveRPCDesktopApp();
-    const appEvents = app.getEvents();
+    const app = new WaveRPCDesktopApp({ disconnectGracePeriodMs: 0 });
+    try {
+      const appEvents = app.getEvents();
 
-    let hasClients = true;
-    (app as any).wsServer.start = async () => true;
-    (app as any).wsServer.stop = async () => {};
-    (app as any).wsServer.hasConnectedClients = () => hasClients;
+      let hasClients = true;
+      (app as any).wsServer.start = async () => true;
+      (app as any).wsServer.stop = async () => {};
+      (app as any).wsServer.hasConnectedClients = () => hasClients;
 
-    const pm = (app as any).discordService.presenceManager;
-    let setActivityCount = 0;
-    let clearActivityCount = 0;
+      const pm = (app as any).discordService.presenceManager;
+      let setActivityCount = 0;
+      let clearActivityCount = 0;
 
-    (pm.rpcClient as any).state = 'CONNECTED';
-    pm.rpcClient.connect = async () => true;
-    pm.rpcClient.disconnect = async () => {};
-    pm.rpcClient.setActivity = async (act: any) => {
-      if (act === null) {
+      (pm.rpcClient as any).state = 'CONNECTED';
+      pm.rpcClient.connect = async () => true;
+      pm.rpcClient.disconnect = async () => {};
+      pm.rpcClient.setActivity = async (act: any) => {
+        if (act === null) {
+          clearActivityCount++;
+        } else {
+          setActivityCount++;
+        }
+        return true;
+      };
+      pm.rpcClient.clearActivity = async () => {
         clearActivityCount++;
-      } else {
-        setActivityCount++;
-      }
-      return true;
-    };
-    pm.rpcClient.clearActivity = async () => {
-      clearActivityCount++;
-      return true;
-    };
+        return true;
+      };
 
-    (app as any).discordService.isConnected = () => true;
+      (app as any).discordService.isConnected = () => true;
 
-    await app.bootstrap();
+      await app.bootstrap();
 
-    appEvents.emit('extension:connected');
-    appEvents.emit('provider:activated', 'soundcloud');
-    const mockTrack: Track = {
-      title: 'Midnight City',
-      artist: 'M83',
-      url: 'https://soundcloud.com/m83/midnight-city',
-      isPlaying: true,
-    };
-    appEvents.emit('track:changed', mockTrack);
-    // Allow asynchronous presence update promise to settle so isPresenceCleared becomes false
-    await new Promise((resolve) => setTimeout(resolve, 10));
+      appEvents.emit('extension:connected');
+      appEvents.emit('provider:activated', 'soundcloud');
+      const mockTrack: Track = {
+        title: 'Midnight City',
+        artist: 'M83',
+        url: 'https://soundcloud.com/m83/midnight-city',
+        isPlaying: true,
+      };
+      appEvents.emit('track:changed', mockTrack);
+      // Allow asynchronous presence update promise to settle so isPresenceCleared becomes false
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const status1 = app.getStatusService().getStatus();
-    assert.strictEqual(status1.extension.connected, true);
-    assert.strictEqual(status1.provider.active, true);
-    assert.ok(status1.track);
-    assert.strictEqual(status1.track.title, 'Midnight City');
-    assert.ok(setActivityCount > 0);
+      const status1 = app.getStatusService().getStatus();
+      assert.strictEqual(status1.extension.connected, true);
+      assert.strictEqual(status1.provider.active, true);
+      assert.ok(status1.track);
+      assert.strictEqual(status1.track.title, 'Midnight City');
+      assert.ok(setActivityCount > 0);
 
-    // Simulate final disconnect
-    hasClients = false;
-    appEvents.emit('extension:disconnected');
+      // Simulate final disconnect
+      hasClients = false;
+      appEvents.emit('extension:disconnected');
 
-    const status2 = app.getStatusService().getStatus();
-    assert.strictEqual(status2.extension.connected, false);
-    assert.strictEqual(status2.provider.active, false);
-    assert.strictEqual(status2.track, undefined);
-    assert.strictEqual(clearActivityCount, 1);
+      const status2 = app.getStatusService().getStatus();
+      assert.strictEqual(status2.extension.connected, false);
+      assert.strictEqual(status2.provider.active, false);
+      assert.strictEqual(status2.track, undefined);
+      assert.strictEqual(clearActivityCount, 1);
+    } finally {
+      await app.shutdown();
+    }
   });
 
   it('19. Default real runtime bootstrap should not activate MockProvider', async () => {
-    const app = new WaveRPCDesktopApp();
+    const app = new WaveRPCDesktopApp({ disconnectGracePeriodMs: 0 });
+    try {
+      // Stub servers/services so we don't start real sockets/connections
+      (app as any).wsServer.start = async () => true;
+      (app as any).wsServer.stop = async () => {};
+      (app as any).discordService.connect = async () => true;
+      (app as any).discordService.disconnect = async () => {};
 
-    // Stub servers/services so we don't start real sockets/connections
-    (app as any).wsServer.start = async () => true;
-    (app as any).wsServer.stop = async () => {};
-    (app as any).discordService.connect = async () => true;
-    (app as any).discordService.disconnect = async () => {};
+      await app.bootstrap();
 
-    await app.bootstrap();
-
-    const status = app.getStatusService().getStatus();
-    assert.strictEqual(status.provider.active, false, 'Should start with no active provider');
-    assert.strictEqual(status.track, undefined, 'Should start with no active track');
+      const status = app.getStatusService().getStatus();
+      assert.strictEqual(status.provider.active, false, 'Should start with no active provider');
+      assert.strictEqual(status.track, undefined, 'Should start with no active track');
+    } finally {
+      await app.shutdown();
+    }
   });
 
   it('20. Bootstrap with WAVERPC_DEV_MOCK=true should activate MockProvider', async () => {
-    const app = new WaveRPCDesktopApp();
+    const app = new WaveRPCDesktopApp({ disconnectGracePeriodMs: 0 });
 
     // Stub servers/services
     (app as any).wsServer.start = async () => true;
@@ -402,6 +423,7 @@ describe('StatusService Tests', () => {
       );
     } finally {
       delete process.env.WAVERPC_DEV_MOCK;
+      await app.shutdown();
     }
   });
 
@@ -412,9 +434,10 @@ describe('StatusService Tests', () => {
       version && version !== '0.0.0',
       'Resolved version should match the desktop package.json version'
     );
+    const expectedVersion = require('../../package.json').version;
     assert.strictEqual(
       version,
-      '0.3.0-alpha.0',
+      expectedVersion,
       'Resolved version must match desktop package version exactly'
     );
   });
@@ -451,9 +474,10 @@ describe('StatusService Tests', () => {
 
     try {
       const version = resolveAppVersion();
+      const expectedVersion = require('../../package.json').version;
       assert.strictEqual(
         version,
-        '0.3.0-alpha.0',
+        expectedVersion,
         'Should fallback to package.json version if getVersion is 0.0.0'
       );
     } finally {

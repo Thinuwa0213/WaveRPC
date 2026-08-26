@@ -11,6 +11,8 @@ export interface TrackUpdatePayload {
   isPlaying: boolean;
   providerId?: string;
   playbackPosition?: number;
+  timingObservedAt?: number;
+  timingSource?: 'media-element' | 'soundcloud-dom' | 'cache-derived' | 'unavailable';
 }
 
 export interface TrackUpdateMessage {

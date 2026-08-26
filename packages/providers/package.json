@@ -1,6 +1,6 @@
 {
   "name": "@waverpc/providers",
-  "version": "0.3.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Provider architecture and implementations for WaveRPC",
   "main": "./dist/index.js",

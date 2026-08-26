@@ -489,4 +489,174 @@ describe('SoundCloudTabStateManager Tests', () => {
       'No track updates should be sent from stale session'
     );
   });
+
+  it('18. PWA source (string ID) works identically to tab source (number ID)', () => {
+    const payload: ExtensionTrackPayload = {
+      title: 'PWA Track',
+      artist: 'Artist PWA',
+      url: 'https://soundcloud.com/pwa-track',
+      isPlaying: true,
+    };
+
+    // string ID for PWA source
+    stateManager.handleTrackUpdate(
+      'pwa-session-123',
+      'session-pwa',
+      payload,
+      'https://soundcloud.com/pwa-track'
+    );
+
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 'pwa-session-123');
+    assert.strictEqual(trackUpdates.length, 1);
+    assert.deepStrictEqual(trackUpdates[0], payload);
+  });
+
+  it('19. PWA close (sender unload) clears active source', () => {
+    const payload: ExtensionTrackPayload = {
+      title: 'PWA Track',
+      artist: 'Artist PWA',
+      url: 'https://soundcloud.com/pwa-track',
+      isPlaying: true,
+    };
+
+    stateManager.handleTrackUpdate(
+      'pwa-session-123',
+      'session-pwa',
+      payload,
+      'https://soundcloud.com/pwa-track'
+    );
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 'pwa-session-123');
+
+    trackUpdates = [];
+
+    // Trigger clear
+    stateManager.handleTrackClear('pwa-session-123', 'session-pwa');
+
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), null);
+    assert.strictEqual(trackClears, 1);
+  });
+
+  it('20. PWA + normal tab multi-source replacement works', () => {
+    const pwaPayload: ExtensionTrackPayload = {
+      title: 'PWA Track',
+      artist: 'Artist PWA',
+      url: 'https://soundcloud.com/pwa-track',
+      isPlaying: true,
+    };
+
+    const tabPayload: ExtensionTrackPayload = {
+      title: 'Tab Track',
+      artist: 'Artist Tab',
+      url: 'https://soundcloud.com/tab-track',
+      isPlaying: false,
+    };
+
+    stateManager.handleTrackUpdate(
+      'pwa-session-123',
+      'session-pwa',
+      pwaPayload,
+      'https://soundcloud.com/pwa-track'
+    );
+    stateManager.handleTrackUpdate(
+      2,
+      'session-tab',
+      tabPayload,
+      'https://soundcloud.com/tab-track'
+    );
+
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 'pwa-session-123');
+
+    trackUpdates = [];
+
+    // Close PWA source, should select tab source as replacement even though it is paused
+    stateManager.handleTrackClear('pwa-session-123', 'session-pwa');
+
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 2);
+    assert.strictEqual(trackUpdates.length, 1);
+    assert.deepStrictEqual(trackUpdates[0], tabPayload);
+    assert.strictEqual(trackClears, 0);
+  });
+
+  it('21. Multi-tab authority handover: A playing -> B starts playing (B authoritative) -> B closes -> A restored with zero leakage', () => {
+    const payloadA: ExtensionTrackPayload = {
+      title: 'Track A',
+      artist: 'Artist A',
+      url: 'https://soundcloud.com/artist-a/track-a',
+      duration: 180000,
+      playbackPosition: 45000,
+      isPlaying: true,
+      providerId: 'soundcloud',
+    };
+
+    const payloadB1: ExtensionTrackPayload = {
+      title: 'Track B',
+      artist: 'Artist B',
+      url: 'https://soundcloud.com/artist-b/track-b',
+      duration: 240000,
+      playbackPosition: 10000,
+      isPlaying: true,
+      providerId: 'soundcloud',
+    };
+
+    const payloadB2: ExtensionTrackPayload = {
+      title: 'Track B',
+      artist: 'Artist B',
+      url: 'https://soundcloud.com/artist-b/track-b',
+      duration: 240000,
+      playbackPosition: 20000,
+      isPlaying: true,
+      providerId: 'soundcloud',
+    };
+
+    // 1. Tab 1 (A) starts playing
+    stateManager.handleTrackUpdate(
+      1,
+      'session-A',
+      payloadA,
+      'https://soundcloud.com/artist-a/track-a'
+    );
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 1);
+    assert.strictEqual(trackUpdates.length, 1);
+    assert.deepStrictEqual(trackUpdates[0], payloadA);
+
+    // 2. Tab 2 (B) starts playing -> B becomes authoritative
+    trackUpdates = [];
+    stateManager.handleTrackUpdate(
+      2,
+      'session-B',
+      payloadB1,
+      'https://soundcloud.com/artist-b/track-b'
+    );
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 2);
+    assert.strictEqual(trackUpdates.length, 1);
+    assert.deepStrictEqual(trackUpdates[0], payloadB1);
+
+    // 3. Tab 2 (B) progresses -> only B's updates are forwarded
+    trackUpdates = [];
+    stateManager.handleTrackUpdate(
+      2,
+      'session-B',
+      payloadB2,
+      'https://soundcloud.com/artist-b/track-b'
+    );
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 2);
+    assert.strictEqual(trackUpdates.length, 1);
+    assert.strictEqual(trackUpdates[0].playbackPosition, 20000);
+
+    // 4. Tab 2 (B) is closed -> deterministic fallback to Tab 1 (A)
+    trackUpdates = [];
+    stateManager.handleTabRemoved(2);
+    assert.strictEqual(stateManager.getActivePlaybackTabId(), 1);
+    assert.strictEqual(trackUpdates.length, 1);
+
+    // 5. Verify restored payload from Tab A has exact Tab A metadata & timing, zero contamination from B
+    const restored = trackUpdates[0];
+    assert.strictEqual(restored.title, 'Track A');
+    assert.strictEqual(restored.artist, 'Artist A');
+    assert.strictEqual(restored.url, 'https://soundcloud.com/artist-a/track-a');
+    assert.strictEqual(restored.duration, 180000);
+    assert.strictEqual(restored.playbackPosition, 45000);
+    assert.strictEqual(restored.isPlaying, true);
+    assert.strictEqual(trackClears, 0);
+  });
 });

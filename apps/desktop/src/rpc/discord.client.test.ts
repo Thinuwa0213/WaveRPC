@@ -86,7 +86,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     const connected = await client.connect();
 
     assert.strictEqual(connected, true);
-    assert.strictEqual(client.ConnectionState, 'CONNECTED');
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
     assert.strictEqual(attemptedPipes.length, 3);
     assert.ok(attemptedPipes[0].endsWith('discord-ipc-0'), 'First pipe should be pipe 0');
     assert.ok(attemptedPipes[1].endsWith('discord-ipc-1'), 'Second pipe should be pipe 1');
@@ -162,7 +162,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     mock.timers.tick(2000);
     await flushMicrotasks(15);
 
-    assert.strictEqual(client.ConnectionState, 'CONNECTED');
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
     assert.strictEqual(
       (client as any).reconnectAttempts,
       0,
@@ -207,7 +207,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: true });
     await client.connect();
 
-    assert.strictEqual(client.ConnectionState, 'CONNECTED');
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
     const targetSocket = mockSocketRef! as MockSocket;
     assert.ok(targetSocket);
 
@@ -252,7 +252,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: false });
     await client.connect();
 
-    assert.strictEqual(client.ConnectionState, 'CONNECTED');
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
 
     // Emit malformed frame (< 8 bytes)
     const malformedBuffer = Buffer.from([0, 1, 2]);
@@ -262,7 +262,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
 
     assert.strictEqual(
       client.ConnectionState,
-      'CONNECTED',
+      'HANDSHAKING',
       'Client should remain connected after malformed frame'
     );
 
@@ -286,7 +286,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: false });
     await client.connect();
 
-    assert.strictEqual(client.ConnectionState, 'CONNECTED');
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
 
     // Header declaring opcode 1 and payload length 100, but buffer only has 10 bytes payload
     const headerBuffer = Buffer.alloc(8);
@@ -302,7 +302,7 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
 
     assert.strictEqual(
       client.ConnectionState,
-      'CONNECTED',
+      'HANDSHAKING',
       'Client should remain connected after partial frame'
     );
 
@@ -378,4 +378,76 @@ describe('DiscordRPCClient Resilience & Transport Tests', () => {
     assert.strictEqual(client.ConnectionState, 'DISCONNECTED');
     assert.strictEqual((client as any).reconnectTimer, null, 'Should not schedule reconnect');
   });
+
+  it('15. old generation READY is ignored and current generation READY is accepted', async () => {
+    const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: false });
+    (client as any).state = 'HANDSHAKING';
+    const currentGen = ((client as any).connectionGeneration = 5);
+
+    const readyFrame = makeResponseFrame(1, { cmd: 'DISPATCH', evt: 'READY' });
+
+    // Send READY on an old generation
+    (client as any).handleSocketData(readyFrame, currentGen - 1);
+    assert.strictEqual(client.ConnectionState, 'HANDSHAKING');
+
+    // Send READY on current generation
+    (client as any).handleSocketData(readyFrame, currentGen);
+    assert.strictEqual(client.ConnectionState, 'READY');
+  });
+
+  it('16. setActivity cannot be sent on an unready generation', async () => {
+    const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: false });
+    (client as any).state = 'HANDSHAKING';
+    (client as any).socket = new MockSocket('mock') as any;
+
+    const res = await client.setActivity({ details: 'test' });
+    assert.strictEqual(res, false, 'Should return false on unready client');
+  });
+
+  it('17. matching SET_ACTIVITY nonce resolves normally after READY', async () => {
+    const client = new DiscordRPCClient({ clientId: '1234567890', autoReconnect: false });
+    (client as any).state = 'READY';
+    const mockSocket = new MockSocket('mock');
+    (client as any).socket = mockSocket as any;
+
+    const currentGen = ((client as any).connectionGeneration = 1);
+
+    let promiseResolved: boolean | null = null;
+    const actPromise = client.setActivity({ details: 'my track' }).then((res) => {
+      promiseResolved = res;
+    });
+
+    // Check that we have a pending request
+    assert.strictEqual((client as any).pendingRequests.size, 1);
+    const nonce = Array.from((client as any).pendingRequests.keys())[0] as string;
+
+    // Simulate response with different generation (should not resolve)
+    const errorResponseFrame = makeResponseFrame(1, { cmd: 'SET_ACTIVITY', nonce, evt: 'ERROR' });
+    (client as any).handleSocketData(errorResponseFrame, currentGen + 1);
+    assert.strictEqual(
+      promiseResolved,
+      null,
+      'Should not resolve from different generation response'
+    );
+
+    // Simulate correct response
+    const successResponseFrame = makeResponseFrame(1, { cmd: 'SET_ACTIVITY', nonce });
+    (client as any).handleSocketData(successResponseFrame, currentGen);
+
+    await actPromise;
+    assert.strictEqual(
+      promiseResolved,
+      true,
+      'Should resolve true on matching nonce and generation'
+    );
+  });
 });
+
+function makeResponseFrame(opcode: number, payload: unknown): Buffer {
+  const json = JSON.stringify(payload);
+  const dataBuffer = Buffer.from(json, 'utf-8');
+  const headerBuffer = Buffer.alloc(8);
+  headerBuffer.writeInt32LE(opcode, 0);
+  headerBuffer.writeInt32LE(dataBuffer.length, 4);
+  return Buffer.concat([headerBuffer, dataBuffer]);
+}

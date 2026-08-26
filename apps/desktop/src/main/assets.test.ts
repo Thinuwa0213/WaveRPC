@@ -55,4 +55,24 @@ describe('WaveRPC Desktop Icon & Assets Integration Tests', () => {
       'Tray source still references old assets/icon.png'
     );
   });
+
+  it('6. Compiled preload script must exist in dist', () => {
+    const preloadPath = path.join(desktopRoot, 'dist/preload/index.js');
+    assert.strictEqual(
+      fs.existsSync(preloadPath),
+      true,
+      `Preload script does not exist at: ${preloadPath}`
+    );
+  });
+
+  it('7. Compiled renderer assets must exist in dist', () => {
+    const htmlPath = path.join(desktopRoot, 'dist/renderer/index.html');
+    const cssPath = path.join(desktopRoot, 'dist/renderer/styles.css');
+    assert.strictEqual(
+      fs.existsSync(htmlPath),
+      true,
+      `Renderer HTML does not exist at: ${htmlPath}`
+    );
+    assert.strictEqual(fs.existsSync(cssPath), true, `Renderer CSS does not exist at: ${cssPath}`);
+  });
 });

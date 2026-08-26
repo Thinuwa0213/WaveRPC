@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { TypedEventEmitter, DEFAULT_SETTINGS, WaveRPCSettings } from '@waverpc/shared';
+import { WaveRPCWebSocketServer } from '../server/websocket.server.js';
 
 // Global mock state
 const electronMockState = {
@@ -20,6 +21,7 @@ const electronMockState = {
   secondInstanceListeners: [] as Function[],
   beforeQuitListeners: [] as Function[],
   tempUserDataDir: '',
+  showErrorBoxCalled: [] as Array<{ title: string; content: string }>,
 };
 
 // Define mock Electron modules
@@ -137,6 +139,7 @@ class MockTray {
     }
     this.listeners[event].push(cb);
   }
+  destroy() {}
 }
 
 const mockElectron = {
@@ -155,6 +158,11 @@ const mockElectron = {
       ipcMainHandlers.set(channel, handler);
     },
   },
+  dialog: {
+    showErrorBox: (title: string, content: string) => {
+      electronMockState.showErrorBoxCalled.push({ title, content });
+    },
+  },
 };
 
 // Intercept require('electron') using require.cache
@@ -168,14 +176,21 @@ require.cache[require.resolve('electron')] = {
 // Now import the tested classes
 import { ElectronApp } from './electron-app.js';
 import { PresenceManager } from '../presence/presence.manager.js';
+import { WaveRPCTray } from '../tray/tray.js';
 
 // Capture registered handlers map for direct unit-test triggers
 const ipcMainHandlers = new Map<string, Function>();
 
 describe('Windows Tray Lifecycle & Startup Behavior Tests', () => {
   let tempDir: string;
+  let activeCoordinators: ElectronApp[] = [];
+  let originalClientId: string | undefined;
 
   beforeEach(() => {
+    process.env.WAVERPC_PORT = '0';
+    originalClientId = process.env.DISCORD_CLIENT_ID;
+    process.env.DISCORD_CLIENT_ID = '123456789012345678';
+    activeCoordinators = [];
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waverpc-tray-test-'));
     electronMockState.tempUserDataDir = tempDir;
     electronMockState.isPackaged = true;
@@ -190,9 +205,23 @@ describe('Windows Tray Lifecycle & Startup Behavior Tests', () => {
     electronMockState.secondInstanceListeners = [];
     electronMockState.beforeQuitListeners = [];
     electronMockState.appListeners = {};
+    electronMockState.showErrorBoxCalled = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const coordinator of activeCoordinators) {
+      try {
+        await coordinator.requestQuit();
+      } catch {}
+    }
+    activeCoordinators = [];
+
+    if (originalClientId !== undefined) {
+      process.env.DISCORD_CLIENT_ID = originalClientId;
+    } else {
+      delete process.env.DISCORD_CLIENT_ID;
+    }
+
     try {
       if (fs.existsSync(path.join(tempDir, 'settings.json'))) {
         fs.unlinkSync(path.join(tempDir, 'settings.json'));
@@ -212,6 +241,7 @@ describe('Windows Tray Lifecycle & Startup Behavior Tests', () => {
     );
 
     const coordinator = new ElectronApp();
+    activeCoordinators.push(coordinator);
 
     // Simulate app ready
     const whenReadyPromise = electronMockState.appListeners['ready']
@@ -381,5 +411,92 @@ describe('Windows Tray Lifecycle & Startup Behavior Tests', () => {
 
     await presenceManager.shutdown();
     assert.strictEqual(clearCalled, 1, 'Should call clearActivity on shutdown');
+  });
+
+  it('11. tray status listener is cleaned up on destroy', () => {
+    const coordinator = new ElectronApp();
+    activeCoordinators.push(coordinator);
+    const events = new TypedEventEmitter();
+    const tray = new WaveRPCTray(coordinator, events);
+
+    let updateMenuCalled = 0;
+    (tray as any).updateTrayMenu = () => {
+      updateMenuCalled++;
+    };
+
+    // Emit status:changed, should invoke updateTrayMenu
+    events.emit('status:changed', {} as any);
+    assert.strictEqual(updateMenuCalled, 1, 'Should call updateTrayMenu on status:changed');
+
+    // Destroy the tray
+    tray.destroy();
+
+    // Emit again, should NOT invoke updateTrayMenu
+    events.emit('status:changed', {} as any);
+    assert.strictEqual(updateMenuCalled, 1, 'Should NOT call updateTrayMenu again after destroy');
+  });
+
+  it('12. port conflict (EADDRINUSE) during bootstrap shows port-specific error box and quits cleanly', async () => {
+    const originalStart = WaveRPCWebSocketServer.prototype.start;
+    WaveRPCWebSocketServer.prototype.start = async function () {
+      const err = new Error('EADDRINUSE mock error');
+      (err as any).code = 'EADDRINUSE';
+      throw err;
+    };
+
+    try {
+      const coordinator = new ElectronApp();
+      activeCoordinators.push(coordinator);
+
+      // Trigger app ready
+      const whenReadyPromise = electronMockState.appListeners['ready']
+        ? Promise.all(electronMockState.appListeners['ready'].map((cb) => cb()))
+        : Promise.resolve();
+      await whenReadyPromise;
+
+      // Wait for async bootstrap tasks to resolve
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.strictEqual(electronMockState.showErrorBoxCalled.length, 1);
+      assert.strictEqual(electronMockState.showErrorBoxCalled[0].title, 'WaveRPC Launch Error');
+      assert.ok(
+        electronMockState.showErrorBoxCalled[0].content.includes('port 6124 is already in use')
+      );
+      assert.strictEqual(electronMockState.quitCalledCount, 1);
+    } finally {
+      WaveRPCWebSocketServer.prototype.start = originalStart;
+    }
+  });
+
+  it('13. generic bootstrap failure shows generic error box and quits cleanly', async () => {
+    const originalStart = WaveRPCWebSocketServer.prototype.start;
+    WaveRPCWebSocketServer.prototype.start = async function () {
+      throw new Error('Generic database error');
+    };
+
+    try {
+      const coordinator = new ElectronApp();
+      activeCoordinators.push(coordinator);
+
+      // Trigger app ready
+      const whenReadyPromise = electronMockState.appListeners['ready']
+        ? Promise.all(electronMockState.appListeners['ready'].map((cb) => cb()))
+        : Promise.resolve();
+      await whenReadyPromise;
+
+      // Wait for async bootstrap tasks to resolve
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.strictEqual(electronMockState.showErrorBoxCalled.length, 1);
+      assert.strictEqual(electronMockState.showErrorBoxCalled[0].title, 'WaveRPC Launch Error');
+      assert.ok(
+        electronMockState.showErrorBoxCalled[0].content.includes(
+          'Technical cause: Generic database error'
+        )
+      );
+      assert.strictEqual(electronMockState.quitCalledCount, 1);
+    } finally {
+      WaveRPCWebSocketServer.prototype.start = originalStart;
+    }
   });
 });

@@ -1,11 +1,13 @@
 import { ExtensionTrackPayload } from '../websocket/messages.js';
 
+export type PlaybackSourceId = number | string;
+
 export class SoundCloudTabStateManager {
   private soundCloudTabs = new Map<
-    number,
+    PlaybackSourceId,
     { sourceSessionId: string; payload: ExtensionTrackPayload }
   >();
-  private activePlaybackTabId: number | null = null;
+  private activePlaybackTabId: PlaybackSourceId | null = null;
   private invalidatedSessionIds = new Set<string>();
   private desktopHasTrack: boolean = false;
 
@@ -16,12 +18,12 @@ export class SoundCloudTabStateManager {
     }
   ) {}
 
-  public getActivePlaybackTabId(): number | null {
+  public getActivePlaybackTabId(): PlaybackSourceId | null {
     return this.activePlaybackTabId;
   }
 
-  public getTabs(): Map<number, ExtensionTrackPayload> {
-    const tabs = new Map<number, ExtensionTrackPayload>();
+  public getTabs(): Map<PlaybackSourceId, ExtensionTrackPayload> {
+    const tabs = new Map<PlaybackSourceId, ExtensionTrackPayload>();
     for (const [id, state] of this.soundCloudTabs.entries()) {
       tabs.set(id, state.payload);
     }
@@ -44,34 +46,35 @@ export class SoundCloudTabStateManager {
    * Called when a tab sends a TRACK_UPDATE.
    */
   public handleTrackUpdate(
-    tabId: number,
+    sourceId: PlaybackSourceId,
     sourceSessionId: string,
     payload: ExtensionTrackPayload,
     tabUrl?: string
   ): void {
-    if (typeof tabId !== 'number') return;
+    if (sourceId === undefined || sourceId === null) return;
     if (tabUrl && !tabUrl.includes('soundcloud.com')) return;
+    if (payload.url && !payload.url.includes('soundcloud.com')) return;
     if (this.invalidatedSessionIds.has(sourceSessionId)) return;
 
-    const existing = this.soundCloudTabs.get(tabId);
+    const existing = this.soundCloudTabs.get(sourceId);
     if (existing && existing.sourceSessionId !== sourceSessionId) {
       this.invalidateSession(existing.sourceSessionId);
     }
 
-    this.soundCloudTabs.set(tabId, { sourceSessionId, payload });
+    this.soundCloudTabs.set(sourceId, { sourceSessionId, payload });
 
     if (payload.isPlaying) {
-      this.activePlaybackTabId = tabId;
-    } else if (this.activePlaybackTabId === null || this.activePlaybackTabId === tabId) {
-      this.activePlaybackTabId = tabId;
+      this.activePlaybackTabId = sourceId;
+    } else if (this.activePlaybackTabId === null || this.activePlaybackTabId === sourceId) {
+      this.activePlaybackTabId = sourceId;
     } else {
       const activeTab = this.soundCloudTabs.get(this.activePlaybackTabId);
       if (!activeTab || !activeTab.payload.isPlaying) {
-        this.activePlaybackTabId = tabId;
+        this.activePlaybackTabId = sourceId;
       }
     }
 
-    if (this.activePlaybackTabId === tabId) {
+    if (this.activePlaybackTabId === sourceId) {
       this.forwardTrackUpdate(payload);
     }
   }
@@ -79,20 +82,20 @@ export class SoundCloudTabStateManager {
   /**
    * Called when a tab sends a TRACK_CLEAR.
    */
-  public handleTrackClear(tabId: number, sourceSessionId: string): void {
+  public handleTrackClear(sourceId: PlaybackSourceId, sourceSessionId: string): void {
     if (this.invalidatedSessionIds.has(sourceSessionId)) {
       return;
     }
 
-    const existing = this.soundCloudTabs.get(tabId);
+    const existing = this.soundCloudTabs.get(sourceId);
     if (!existing || existing.sourceSessionId !== sourceSessionId) {
       return;
     }
 
     this.invalidateSession(sourceSessionId);
-    this.soundCloudTabs.delete(tabId);
+    this.soundCloudTabs.delete(sourceId);
 
-    if (this.activePlaybackTabId === tabId) {
+    if (this.activePlaybackTabId === sourceId) {
       this.resolveActivePlaybackReplacement();
     }
   }
@@ -100,20 +103,20 @@ export class SoundCloudTabStateManager {
   /**
    * Called when a tab is removed, loading, or navigated away.
    */
-  public handleTabRemoved(tabId: number): void {
-    const existing = this.soundCloudTabs.get(tabId);
+  public handleTabRemoved(sourceId: PlaybackSourceId): void {
+    const existing = this.soundCloudTabs.get(sourceId);
     if (existing) {
       this.invalidateSession(existing.sourceSessionId);
-      this.soundCloudTabs.delete(tabId);
+      this.soundCloudTabs.delete(sourceId);
     }
 
-    if (this.activePlaybackTabId === tabId) {
+    if (this.activePlaybackTabId === sourceId) {
       this.resolveActivePlaybackReplacement();
     }
   }
 
   private resolveActivePlaybackReplacement(): void {
-    let replacementTabId: number | null = null;
+    let replacementTabId: PlaybackSourceId | null = null;
     let replacementPayload: ExtensionTrackPayload | null = null;
 
     // 1. Try to find a playing tab

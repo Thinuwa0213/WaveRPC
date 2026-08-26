@@ -1,12 +1,14 @@
 import { TypedEventEmitter } from '@waverpc/shared';
 import { PresenceManager } from '../presence/presence.manager.js';
 import { DiscordActivityPayload } from '../presence/types.js';
+import { defaultConfig } from '../config/default.js';
 
 export class DiscordService {
   private presenceManager: PresenceManager;
 
   constructor(events: TypedEventEmitter, clientId?: string) {
-    const finalClientId = clientId || process.env.DISCORD_CLIENT_ID || '123456789012345678';
+    const finalClientId =
+      clientId || process.env.DISCORD_CLIENT_ID || defaultConfig.discordClientId;
     this.presenceManager = new PresenceManager(events, {
       clientId: finalClientId,
     });

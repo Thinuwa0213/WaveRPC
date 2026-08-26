@@ -1,6 +1,6 @@
 {
   "name": "waverpc-monorepo",
-  "version": "0.3.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Universal music Rich Presence platform connecting music services with Discord Rich Presence",
   "scripts": {
@@ -9,7 +9,9 @@
     "lint": "pnpm --recursive run lint",
     "test": "pnpm --recursive --if-present run test",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{ts,js,json,md}\""
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "package:release": "node scripts/package-release.js",
+    "package:rc": "node scripts/package-release.js --rc"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

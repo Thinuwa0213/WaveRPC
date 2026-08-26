@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, dialog } from 'electron';
 import { WaveRPCDesktopApp } from './index.js';
 import { MainWindow } from '../window/main-window.js';
 import { WaveRPCTray } from '../tray/tray.js';
@@ -32,12 +32,20 @@ export class ElectronApp {
     });
 
     app.whenReady().then(async () => {
+      if (this.isQuitting) {
+        log.info('App is quitting. Aborting bootstrap.');
+        return;
+      }
       log.info('Electron app ready. Starting services...');
 
-      // Initialize runtime services
       this.runtimeApp = new WaveRPCDesktopApp();
       try {
         await this.runtimeApp.bootstrap();
+
+        if (this.isQuitting || !this.runtimeApp) {
+          log.info('App is quitting. Aborting startup reconciliation.');
+          return;
+        }
 
         // Reconcile persisted launchAtStartup setting with OS startup registry
         const settings = this.runtimeApp.getSettingsService().getSettings();
@@ -61,8 +69,21 @@ export class ElectronApp {
             `[Startup] launchAtStartup preference saved; OS registration skipped in development mode. (value: ${settings.launchAtStartup})`
           );
         }
-      } catch (err) {
+      } catch (err: any) {
         log.error('Failed to bootstrap WaveRPC Desktop runtime:', err);
+        if (err && err.code === 'EADDRINUSE') {
+          dialog.showErrorBox(
+            'WaveRPC Launch Error',
+            "WaveRPC couldn't start its local bridge because port 6124 is already in use.\n\nClose the other application using this port and start WaveRPC again."
+          );
+        } else {
+          dialog.showErrorBox(
+            'WaveRPC Launch Error',
+            `WaveRPC failed to start. Technical cause: ${err?.message || err}`
+          );
+        }
+        this.requestQuit();
+        return;
       }
 
       // Handle safe version request from preload without hardcoding
@@ -144,39 +165,48 @@ export class ElectronApp {
     });
   }
 
-  public async requestQuit(): Promise<void> {
-    if (this.isQuitting && this.shutdownPromise) {
-      await this.shutdownPromise;
-      return;
+  public requestQuit(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
     }
 
     this.isQuitting = true;
     log.info('Commencing canonical quit and clean shutdown of WaveRPC runtime...');
 
-    if (!this.shutdownPromise) {
-      this.shutdownPromise = (async () => {
+    this.shutdownPromise = (async () => {
+      try {
+        if (this.runtimeApp) {
+          await this.runtimeApp.shutdown();
+          this.runtimeApp = null;
+        }
+      } catch (err) {
+        log.error('Error during runtime app shutdown:', err);
+      } finally {
         try {
           if (this.mainWindow) {
             this.mainWindow.destroy();
             this.mainWindow = null;
           }
+        } catch (err) {
+          log.error('Error destroying main window:', err);
+        }
+
+        try {
           if (this.tray) {
             this.tray.destroy();
             this.tray = null;
           }
-          if (this.runtimeApp) {
-            await this.runtimeApp.shutdown();
-            this.runtimeApp = null;
-          }
         } catch (err) {
-          log.error('Error during shutdown:', err);
+          log.error('Error destroying system tray:', err);
         }
-      })();
-    }
 
-    await this.shutdownPromise;
-    log.info('Shutdown complete. Exiting process.');
-    app.quit();
+        log.info('Runtime shutdown complete. Calling app.quit().');
+        log.info('Electron quit completed.');
+        app.quit();
+      }
+    })();
+
+    return this.shutdownPromise;
   }
 
   public getQuittingFlag(): boolean {

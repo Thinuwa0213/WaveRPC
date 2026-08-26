@@ -5,13 +5,13 @@
 [![CI](https://github.com/waverpc/waverpc/actions/workflows/ci.yml/badge.svg)](https://github.com/waverpc/waverpc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![pnpm](https://img.shields.io/badge/pnpm-workspace-orange.svg)](https://pnpm.io)
-[![Release](https://img.shields.io/badge/release-v0.3.0--alpha.0-blue.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.0.0-blue.svg)](CHANGELOG.md)
 
 ---
 
 ## 📌 Status & Overview
 
-**Current Release Status**: `v0.3.0-alpha.0` (Alpha)
+**Current Release Status**: `v1.0.0` (General Availability / Stable)
 
 WaveRPC bridges music services directly to Discord Rich Presence via a clean, high-performance monorepo architecture.
 
@@ -19,7 +19,7 @@ WaveRPC bridges music services directly to Discord Rich Presence via a clean, hi
 
 WaveRPC operates entirely **locally** on your device:
 
-- **No Remote Servers**: 100% of network traffic remains strictly between your local browser extension and local desktop background service via a local WebSocket bridge (`ws://127.0.0.1:41920`).
+- **No Remote Servers**: 100% of network traffic remains strictly between your local browser extension and local desktop background service via a local WebSocket bridge (`ws://127.0.0.1:6124`).
 - **Direct Discord IPC**: Updates are sent directly to the local Discord Desktop client using native local IPC pipes (`\\.\pipe\discord-ipc-*`).
 - **Privacy Sanitization**: All track metadata undergoes local sanitization (`PrivacySanitizer`) to strip authentication tokens and tracking query parameters prior to broadcast.
 
@@ -27,24 +27,24 @@ WaveRPC operates entirely **locally** on your device:
 
 ## 🗺️ Supported Providers & Roadmap
 
-| Provider                      |         Status         |     App Support     |
-| :---------------------------- | :--------------------: | :-----------------: |
-| 🟠 **SoundCloud**             | ✅ **Alpha Supported** | Extension & Desktop |
-| 🟢 **Spotify**                |       📅 Planned       | Extension & Desktop |
-| 🔴 **YouTube Music**          |       📅 Planned       | Extension & Desktop |
-| 💖 **Apple Music**            |       📅 Planned       | Extension & Desktop |
-| 🌐 **Browser Media Sessions** |       📅 Planned       |      Extension      |
+| Provider                      |    Status    |     App Support     |
+| :---------------------------- | :----------: | :-----------------: |
+| 🟠 **SoundCloud**             | ✅ Supported | Extension & Desktop |
+| 🟢 **Spotify**                |  📅 Planned  | Extension & Desktop |
+| 🔴 **YouTube Music**          |  📅 Planned  | Extension & Desktop |
+| 💖 **Apple Music**            |  📅 Planned  | Extension & Desktop |
+| 🌐 **Browser Media Sessions** |  📅 Planned  |      Extension      |
 
 ---
 
 ## 📋 System Requirements
 
-To run WaveRPC during the Alpha phase, you need:
+To run WaveRPC, you need:
 
 1. **Discord Desktop Application** running locally on your computer.
 2. **WaveRPC Browser Extension** installed in Chrome or Chromium-based browsers.
 3. **WaveRPC Desktop Service** running locally.
-4. **Discord Application Client ID** (`DISCORD_CLIENT_ID`) for local development/alpha setup.
+4. **Discord Application Client ID** (`DISCORD_CLIENT_ID`) for custom developer configurations (defaults to official WaveRPC application ID).
 
 ---
 
@@ -69,7 +69,7 @@ To run WaveRPC during the Alpha phase, you need:
 
 ### 2. Environment Setup
 
-Copy `.env.example` to `.env` (or export the variable in your shell) and set your public Discord Application Client ID:
+Copy `.env.example` to `.env` (or export the variable in your shell) if you wish to override the default Discord Application Client ID:
 
 ```bash
 cp .env.example .env
@@ -108,7 +108,7 @@ pnpm test
 2. **Load Extension in Chrome**:
    - Open `chrome://extensions` in Chrome.
    - Enable **Developer mode** (toggle in upper right corner).
-   - Click **Load unpacked** and select the `apps/extension` folder (after `pnpm build`).
+   - Click **Load unpacked** and select the `apps/extension/dist` folder (after `pnpm build`) or extract the release extension ZIP.
 3. **Listen on SoundCloud**:
    - Play any track on [SoundCloud](https://soundcloud.com).
    - WaveRPC will automatically detect playback and reflect rich presence on your Discord profile!

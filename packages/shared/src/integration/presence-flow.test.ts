@@ -31,6 +31,24 @@ class MockSocket extends EventEmitter {
         const payload = JSON.parse(payloadStr);
         this.writtenPackets.push({ opcode, payload });
 
+        if (this.autoReply && opcode === 0) {
+          process.nextTick(() => {
+            const responsePayload = {
+              cmd: 'DISPATCH',
+              evt: 'READY',
+              nonce: null,
+              data: { v: 1 },
+            };
+            const responseJson = JSON.stringify(responsePayload);
+            const responseData = Buffer.from(responseJson, 'utf-8');
+            const responseHeader = Buffer.alloc(8);
+            responseHeader.writeInt32LE(1, 0);
+            responseHeader.writeInt32LE(responseData.length, 4);
+            const responsePacket = Buffer.concat([responseHeader, responseData]);
+            this.emit('data', responsePacket);
+          });
+        }
+
         if (this.autoReply && opcode === 1 && payload.nonce) {
           process.nextTick(() => {
             const responsePayload = {
@@ -189,10 +207,14 @@ describe('Presence Flow Integration Tests', () => {
         artwork: 'https://i1.sndcdn.com/artworks-0001.jpg',
         duration: 180000,
         isPlaying: true,
+        playbackPosition: 0,
         providerId: 'soundcloud',
       },
     };
     handler.handleMessage(JSON.stringify(trackUpdateMessage));
+
+    // Wait for async RPC setActivity to resolve so presenceState becomes 'ACTIVE'
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Clear packets list for clean check
     mockSocket.writtenPackets = [];
@@ -209,22 +231,16 @@ describe('Presence Flow Integration Tests', () => {
     const handledPause = handler.handleMessage(JSON.stringify(pauseMessage));
     assert.strictEqual(handledPause, true, 'Handler should handle PLAYBACK_UPDATE message');
 
-    // Verify activity sent is paused
+    // Wait for async RPC clearActivity to resolve
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Verify activity sent is cleared for Spotify-like pause
     const pausePacket = mockSocket.writtenPackets.find(
       (p: any) => p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY'
     );
-    assert.ok(pausePacket, 'Should have sent activity update for pause');
+    assert.ok(pausePacket, 'Should have sent activity clear packet for pause');
     const pauseActivity = pausePacket.payload.args.activity;
-    assert.strictEqual(pauseActivity.state, 'Wave Artist • Paused');
-    assert.strictEqual(
-      pauseActivity.timestamps,
-      undefined,
-      'Paused state should not have timestamps'
-    );
-    assert.deepStrictEqual(pauseActivity.assets, {
-      large_image: 'https://i1.sndcdn.com/artworks-0001.jpg',
-      large_text: 'SoundCloud',
-    });
+    assert.strictEqual(pauseActivity, null, 'Activity should be cleared (null) during pause');
 
     // Clear packets list
     mockSocket.writtenPackets = [];
@@ -238,15 +254,19 @@ describe('Presence Flow Integration Tests', () => {
       },
     };
 
-    const handledPlay = handler.handleMessage(JSON.stringify(playMessage));
-    assert.strictEqual(handledPlay, true, 'Handler should handle PLAYBACK_UPDATE message to play');
+    const handledResume = handler.handleMessage(JSON.stringify(playMessage));
+    assert.strictEqual(handledResume, true, 'Handler should handle PLAYBACK_UPDATE message');
 
-    // Verify activity sent has timestamps and playing asset
-    const playPacket = mockSocket.writtenPackets.find(
-      (p: any) => p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY'
+    // Wait for async RPC setActivity to resolve
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Verify activity sent is resumed
+    const resumePacket = mockSocket.writtenPackets.find(
+      (p: any) =>
+        p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity !== null
     );
-    assert.ok(playPacket, 'Should have sent activity update for play');
-    const playActivity = playPacket.payload.args.activity;
+    assert.ok(resumePacket, 'Should have sent activity update for play');
+    const playActivity = resumePacket.payload.args.activity;
     assert.strictEqual(playActivity.state, 'Wave Artist');
     assert.ok(
       playActivity.timestamps && typeof playActivity.timestamps.start === 'number',
@@ -446,6 +466,7 @@ describe('Presence Flow Integration Tests', () => {
         artist: 'Stable Artist',
         url: 'https://soundcloud.com/artist/stable-track',
         isPlaying: true,
+        playbackPosition: 0,
         providerId: 'soundcloud',
       },
     };
@@ -468,6 +489,7 @@ describe('Presence Flow Integration Tests', () => {
         url: 'https://soundcloud.com/artist/stable-track',
         duration: 200000,
         isPlaying: true,
+        playbackPosition: 0,
         providerId: 'soundcloud',
       },
     };
@@ -556,7 +578,7 @@ describe('Presence Flow Integration Tests', () => {
     }
   });
 
-  it('should calculate timestamps using playbackPosition correctly', () => {
+  it('should pass logicalStartTime directly to Discord timestamps', () => {
     const track = {
       title: 'Position Track',
       artist: 'Position Artist',
@@ -570,8 +592,8 @@ describe('Presence Flow Integration Tests', () => {
     const activity = PresenceMapper.mapTrackToActivity(track, 'playing', 'SoundCloud', startTime);
     assert.ok(activity);
     assert.ok(activity.timestamps);
-    assert.strictEqual(activity.timestamps.start, startTime - 45000);
-    assert.strictEqual(activity.timestamps.end, startTime - 45000 + 180000);
+    assert.strictEqual(activity.timestamps.start, Math.floor(startTime / 1000));
+    assert.strictEqual(activity.timestamps.end, Math.floor((startTime + 180000) / 1000));
   });
 
   it('should omit Listen button when track URL is invalid', () => {
@@ -1088,6 +1110,218 @@ describe('Presence Flow Integration Tests', () => {
       assert.strictEqual(infoLogged, false, 'PING should not produce info-level logs');
     } finally {
       Logger.prototype.info = originalInfo;
+    }
+  });
+
+  it('E2E integration: TRACK_UPDATE with timing preserves values and propagates to Discord presence mapper with correct epoch seconds', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, {
+      clientId: '999999999999999999',
+    });
+
+    await manager.initialize();
+    mockSocket.writtenPackets = [];
+
+    const trackUpdateMessage = {
+      type: 'TRACK_UPDATE',
+      payload: {
+        title: 'Long Mix',
+        artist: 'Wave Artist',
+        url: 'https://soundcloud.com/wave-artist/long-mix',
+        artwork: 'https://i1.sndcdn.com/artworks-0001.jpg',
+        duration: 3567000,
+        isPlaying: true,
+        playbackPosition: 1067000,
+        providerId: 'soundcloud',
+      },
+    };
+
+    const baseTime = Date.now();
+    const originalDateNow = Date.now;
+    Date.now = () => baseTime;
+
+    try {
+      handler.handleMessage(JSON.stringify(trackUpdateMessage));
+
+      const setActivityPacket = mockSocket.writtenPackets.find(
+        (p: any) =>
+          p.opcode === 1 && p.payload.cmd === 'SET_ACTIVITY' && p.payload.args.activity !== null
+      );
+      assert.ok(setActivityPacket, 'Should have sent setActivity command');
+      const activity = setActivityPacket.payload.args.activity;
+      assert.ok(activity.timestamps, 'Should contain timestamps');
+
+      const expectedStartSeconds = Math.floor((baseTime - 1067000) / 1000);
+      const expectedEndSeconds = Math.floor((baseTime - 1067000 + 3567000) / 1000);
+
+      assert.strictEqual(
+        activity.timestamps.start,
+        expectedStartSeconds,
+        'Start timestamp must match expected start in epoch seconds'
+      );
+      assert.strictEqual(
+        activity.timestamps.end,
+        expectedEndSeconds,
+        'End timestamp must match expected end in epoch seconds'
+      );
+    } finally {
+      Date.now = originalDateNow;
+      await manager.shutdown();
+    }
+  });
+
+  it('E2E integration: Phase 4.3.1G reproducing exact timingless update failure sequence', async () => {
+    const events = new TypedEventEmitter();
+    const handler = new ExtensionMessageHandler(events);
+    const manager = new PresenceManager(events, {
+      clientId: '999999999999999999',
+    });
+
+    await manager.initialize();
+    mockSocket.writtenPackets = [];
+
+    const baseTime = Date.now();
+    const originalDateNow = Date.now;
+    Date.now = () => baseTime;
+
+    try {
+      // A. Playing update with no timing
+      handler.handleMessage(
+        JSON.stringify({
+          type: 'TRACK_UPDATE',
+          payload: {
+            title: 'Track A',
+            artist: 'Artist A',
+            url: 'urlA',
+            isPlaying: true,
+            playbackPosition: undefined,
+            duration: undefined,
+            providerId: 'soundcloud',
+          },
+        })
+      );
+
+      // Flush to allow PresenceManager to process
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let setActivityPacket = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+      assert.ok(setActivityPacket, 'Should have sent setActivity');
+      assert.strictEqual(
+        setActivityPacket.payload.args.activity.timestamps,
+        undefined,
+        'Activity should contain NO timestamps during TIMINGLESS_WAIT'
+      );
+
+      // B. Shortly afterward: Valid timing arrives (TIMING_ACQUIRED)
+      handler.handleMessage(
+        JSON.stringify({
+          type: 'TRACK_UPDATE',
+          payload: {
+            title: 'Track A',
+            artist: 'Artist A',
+            url: 'urlA',
+            isPlaying: true,
+            playbackPosition: 1000,
+            duration: 283000,
+            timingObservedAt: baseTime + 1000,
+            providerId: 'soundcloud',
+          },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      setActivityPacket = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+      assert.ok(
+        setActivityPacket.payload.args.activity.timestamps,
+        'Activity should now contain timestamps'
+      );
+      const startSecs = Math.floor((baseTime + 1000 - 1000) / 1000);
+      assert.strictEqual(setActivityPacket.payload.args.activity.timestamps.start, startSecs);
+
+      // C. Later temporary timing loss (TIMINGLESS_PRESERVE)
+      handler.handleMessage(
+        JSON.stringify({
+          type: 'TRACK_UPDATE',
+          payload: {
+            title: 'Track A',
+            artist: 'Artist A',
+            url: 'urlA',
+            isPlaying: true,
+            playbackPosition: undefined,
+            duration: undefined,
+            providerId: 'soundcloud',
+          },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      setActivityPacket = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+      assert.strictEqual(
+        setActivityPacket.payload.args.activity.timestamps.start,
+        startSecs,
+        'Activity should retain start timestamp through TIMINGLESS_PRESERVE'
+      );
+
+      // D. Pause at 81000
+      handler.handleMessage(
+        JSON.stringify({
+          type: 'TRACK_UPDATE',
+          payload: {
+            title: 'Track A',
+            artist: 'Artist A',
+            url: 'urlA',
+            isPlaying: false,
+            playbackPosition: 81000,
+            duration: 283000,
+            timingObservedAt: baseTime + 81000,
+            providerId: 'soundcloud',
+          },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const clearActivityPacket = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+      // Activity payload should be null/empty for pause
+      assert.strictEqual(
+        clearActivityPacket.payload.args.activity,
+        null,
+        'Discord presence should be clear'
+      );
+
+      // E. Resume at 81000
+      handler.handleMessage(
+        JSON.stringify({
+          type: 'TRACK_UPDATE',
+          payload: {
+            title: 'Track A',
+            artist: 'Artist A',
+            url: 'urlA',
+            isPlaying: true,
+            playbackPosition: 81000,
+            duration: 283000,
+            timingObservedAt: baseTime + 120000, // 39s paused
+            providerId: 'soundcloud',
+          },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      setActivityPacket = mockSocket.writtenPackets[mockSocket.writtenPackets.length - 1];
+      assert.ok(
+        setActivityPacket.payload.args.activity.timestamps,
+        'Activity should contain timestamps upon RESUME_REANCHOR'
+      );
+
+      const newStartSecs = Math.floor((baseTime + 120000 - 81000) / 1000);
+      assert.strictEqual(
+        setActivityPacket.payload.args.activity.timestamps.start,
+        newStartSecs,
+        'Start timestamp must re-anchor correctly, excluding paused time'
+      );
+    } finally {
+      Date.now = originalDateNow;
+      await manager.shutdown();
     }
   });
 });

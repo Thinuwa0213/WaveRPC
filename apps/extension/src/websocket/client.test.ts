@@ -305,4 +305,43 @@ describe('ExtensionWSClient Resilience & Reconnect Tests', () => {
 
     client.disconnect();
   });
+
+  it('9. onConnect and onDisconnect callbacks: should trigger callbacks on connection state changes', () => {
+    let connectCalls = 0;
+    let disconnectCalls = 0;
+
+    const client = new ExtensionWSClient({
+      onConnect: () => {
+        connectCalls++;
+      },
+      onDisconnect: () => {
+        disconnectCalls++;
+      },
+    });
+
+    client.connect();
+    const socket = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+
+    socket.triggerOpen();
+    assert.strictEqual(connectCalls, 1);
+
+    socket.triggerClose();
+    assert.strictEqual(disconnectCalls, 1);
+
+    client.disconnect();
+  });
+
+  it('10. connect() deduplicates CONNECTING state: multiple connect() calls during CONNECTING are no-ops', () => {
+    const client = new ExtensionWSClient();
+    client.connect();
+    client.connect();
+    client.connect();
+
+    assert.strictEqual(
+      MockWebSocket.instances.length,
+      1,
+      'Only one WebSocket instance should be created'
+    );
+    client.disconnect();
+  });
 });

@@ -1,5 +1,7 @@
-import { Track, PlaybackState } from '@waverpc/shared';
+import { Track, PlaybackState, Logger } from '@waverpc/shared';
 import { DiscordActivityPayload } from './types.js';
+
+const log = new Logger('PresenceMapper');
 
 export class PresenceMapper {
   public static mapTrackToActivity(
@@ -8,44 +10,33 @@ export class PresenceMapper {
     providerName: string = 'WaveRPC',
     startTime?: number
   ): DiscordActivityPayload | undefined {
-    if (!track || playbackState === 'stopped') {
+    if (!track || playbackState !== 'playing') {
       return undefined;
     }
 
     const isPlaying = playbackState === 'playing';
-    const now = startTime ?? Date.now();
 
     let timestamps: DiscordActivityPayload['timestamps'] = undefined;
-    if (isPlaying) {
-      if (
-        track.playbackPosition !== undefined &&
-        typeof track.playbackPosition === 'number' &&
-        Number.isFinite(track.playbackPosition) &&
-        track.playbackPosition >= 0
-      ) {
-        const start = now - track.playbackPosition;
-        if (track.duration && track.duration > 0) {
-          timestamps = {
-            start: Math.round(start),
-            end: Math.round(start + track.duration),
-          };
-        } else {
-          timestamps = {
-            start: Math.round(start),
-          };
-        }
+    if (isPlaying && startTime !== undefined) {
+      const start = startTime;
+      if (track.duration && track.duration > 0 && Number.isFinite(track.duration)) {
+        timestamps = {
+          start: Math.floor(start / 1000),
+          end: Math.floor((start + track.duration) / 1000),
+        };
       } else {
-        if (track.duration && track.duration > 0) {
-          timestamps = {
-            start: Math.round(now),
-            end: Math.round(now + track.duration),
-          };
-        } else {
-          timestamps = {
-            start: Math.round(now),
-          };
-        }
+        timestamps = {
+          start: Math.floor(start / 1000),
+        };
       }
+
+      log.debug('[DEV-LOG] PresenceMapper timestamps calculated:', {
+        isPlaying,
+        logicalStartTimeMs: startTime,
+        durationMs: track.duration,
+        finalStartSec: timestamps?.start,
+        finalEndSec: timestamps?.end,
+      });
     }
 
     const titleText = (track.title || 'Unknown Track').trim();

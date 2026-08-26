@@ -1,19 +1,21 @@
 {
   "name": "@waverpc/extension",
-  "version": "0.3.0-alpha.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Chrome Extension for WaveRPC",
   "scripts": {
     "build": "node scripts/build.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node scripts/build.js --test && node --test dist-test/**/*.test.js"
+    "test": "node scripts/build.js --test && node --test dist-test/**/*.test.js",
+    "package": "node scripts/package-extension.js"
   },
   "dependencies": {
     "@waverpc/providers": "workspace:*",
     "@waverpc/shared": "workspace:*"
   },
   "devDependencies": {
+    "adm-zip": "^0.6.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.5.4"
   }
