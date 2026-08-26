@@ -32,10 +32,41 @@ jobs:
       - name: Build monorepo
         run: pnpm run build
 
+      - name: Process Release Metadata
+        id: metadata
+        run: |
+          TAG="${{ github.ref_name }}"
+          FILE="docs/releases/${TAG}.md"
+          
+          # Check if the release notes file exists
+          if [ ! -f "$FILE" ]; then
+            echo "::error::Expected release notes file not found: $FILE"
+            exit 1
+          fi
+          
+          echo "body_path=$FILE" >> "$GITHUB_OUTPUT"
+          
+          # Extract release title from the first line if it's a markdown header
+          TITLE="WaveRPC ${TAG}"
+          FIRST_LINE=$(head -n 1 "$FILE")
+          if [[ "$FIRST_LINE" =~ ^#\ (.*) ]]; then
+            TITLE="${BASH_REMATCH[1]}"
+          fi
+          echo "release_title=$TITLE" >> "$GITHUB_OUTPUT"
+          
+          # Detect prerelease status
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.metadata.outputs.release_title }}
+          body_path: ${{ steps.metadata.outputs.body_path }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.metadata.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
